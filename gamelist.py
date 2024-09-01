@@ -153,7 +153,3 @@ class GameList:
 
     def get_xml(self):
         return self._gamelist
-    
-    
-gamelist = GameList("C:\\Temp\\gamelist_xmls\\amiga\\gamelist.xml")
-gamelist.save()
