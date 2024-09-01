@@ -1,7 +1,7 @@
 import xml.etree.ElementTree as ET
 import utils
 
-class GameList:
+class Gamelist:
     def __init__(self, gamelist=None):
         self._fields = ["name", "desc", "image", "rating", "releasedate", "developer", "publisher", "genre", "players", "playcount", "lastplayed", "favorite"] 
         self._do_not_overwrite = ["playcount", "lastplayed", "favorite"]
@@ -13,6 +13,14 @@ class GameList:
             self.parse(gamelist)
 
 
+    @property
+    def system(self):
+        return self._system
+    
+    @property
+    def gamelist(self):
+        return self._gamelist
+    
     def _get_system(self, path: str):
         parts = path.split("/")
         if len(parts) <= 2:
@@ -151,5 +159,28 @@ class GameList:
         return games_list
     
 
-    def get_xml(self):
-        return self._gamelist
+    def get_mediadirs(self, media_types: list):
+        media = {}
+        for media_type in media_types:
+            paths = []
+            elements = self._gamelist.findall(f".//game[{media_type}]")
+            for element in elements:
+                if element.text is None or element.text.strip() == "":
+                    continue
+                path = utils.get_path(utils.get_system_shortname(self._system, element.text))
+                if path not in paths:
+                    paths.append(path)
+            if len(paths) > 0:
+                media[media_type] = paths
+
+        return media
+    
+    def get_roms(self):
+        roms = []
+        elements = self._gamelist.findall(f".//game[path]")
+        for element in elements:
+            rom = utils.get_system_shortname(self._system, element.text)
+            if element not in roms:
+                roms.append(rom)
+
+        return roms

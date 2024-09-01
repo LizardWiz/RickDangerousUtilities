@@ -1,6 +1,10 @@
 from datetime import datetime, timezone
 import shutil
 import os
+from gamesystem_batocera import BatoceraGameSystem
+
+def get_gamesystem(system: str):
+    return BatoceraGameSystem(system)
 
 
 def safe_write_check(file_path: str, file_time: str):
@@ -21,3 +25,17 @@ def safe_write_backup(file_path: str, file_time=""):
     shutil.copy2(file_path, file_path + "--" + file_time)
 
     return file_time
+
+
+def get_path(file: str):
+    return os.path.dirname(file)
+
+
+def get_system_longname(system: str, path: str):
+    # todo: create ini class
+    return path.replace("./", f"/userdata/roms/{system}")
+
+
+def get_system_shortname(system: str, path: str):
+    # todo: create ini class
+    return path.replace(f"/userdata/roms/{system}", "./")
