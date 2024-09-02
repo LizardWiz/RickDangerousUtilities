@@ -1,8 +1,8 @@
-from gamelist import Gamelist
-from gamesystem import GameSystem
+from classes.gamelist import Gamelist
+from classes.gamesystem import GameSystem
 import os
-import utils
-from pathlib import Path
+import classes.utils as utils
+from glob import glob
 
 class GamelistChecker:
     def __init__(self, gamelist: Gamelist, gamesystem: GameSystem):
@@ -18,7 +18,7 @@ class GamelistChecker:
         directories_processed = []
         files = []
         for rom in roms:
-            long_rom = utils.get_system_longname(self._gamelist, rom)
+            long_rom = utils.get_system_longname(self._gamelist.system, rom)
             if os.path.isdir(long_rom):
                 if long_rom not in files:
                     files.append(long_rom)
@@ -26,9 +26,12 @@ class GamelistChecker:
                 directory = utils.get_path(long_rom)
                 if directory in directories_processed:
                     continue
-                for filetype in self._gamesystem._filetypes:
-                    directory_files =[f for f in Path().glob(f"{directory}/*.{filetype}")]
-                    files.extend(directory_files)
+
+                for filetype in self._gamesystem.filetypes:
+                    directory_files = glob(f"{directory}/*{filetype}")
+                    if len(directory_files) > 0:
+                        files.extend(directory_files)
+                directories_processed.append(directory)
 
         self._files["roms"] = [files, []]
 
@@ -46,7 +49,7 @@ class GamelistChecker:
                 long_directory = utils.get_system_longname(self._gamelist._system, directory)
                 if long_directory in directories_processed:
                     continue
-                directory_files = os.listdir(f"{long_directory}")
+                directory_files = glob(f"{long_directory}/*")
                 for directory_file in directory_files:
                     if os.path.isfile(directory_file):
                         files.append(directory_file)
@@ -60,7 +63,7 @@ class GamelistChecker:
 
     def process(self, fields: list):
         games = self._gamelist.get_games(["system", "name", "path"] + fields)
-        self._get_romfiles(self)
-        self.get_mediafiles(self, fields)
+        self._get_romfiles()
+        self._get_mediafiles(fields)
 
         return

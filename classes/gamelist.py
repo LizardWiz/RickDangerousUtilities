@@ -1,12 +1,12 @@
 import xml.etree.ElementTree as ET
-import utils
+import classes.utils as utils
 
 class Gamelist:
     def __init__(self, gamelist=None):
-        self._fields = ["name", "desc", "image", "rating", "releasedate", "developer", "publisher", "genre", "players", "playcount", "lastplayed", "favorite"] 
+        self._fields = ["name", "path", "desc", "image", "rating", "releasedate", "developer", "publisher", "genre", "players", "playcount", "lastplayed", "favorite"] 
         self._do_not_overwrite = ["playcount", "lastplayed", "favorite"]
         self._path = gamelist if gamelist else None
-        self._system = self._get_system(gamelist) if gamelist else None
+        self._system = self._get_system(gamelist) if gamelist is not None else None
         if gamelist is None:
             self._gamelist = None
         else:
@@ -25,10 +25,10 @@ class Gamelist:
         parts = path.split("/")
         if len(parts) <= 2:
             return None
-        if parts(len(parts) - 1) != "gamelist.xml":
+        if parts[len(parts) - 1] != "gamelist.xml":
             return None
         
-        return parts(len(parts) - 2)
+        return parts[len(parts) - 2]
     
 
     def _indent(self, space="  ", level=0):
@@ -108,32 +108,30 @@ class Gamelist:
                 if attribute.text is not None:
                     attributes[attribute.tag] = attribute.text
             # now write sorted attributes
-            game = ET.Element("game")
+            game = ET.SubElement(dest_root, "game")
             for field in self._fields:
                 if field in attributes.keys():
-                    elem = ET.SubElement(game, field)
-                    elem.text = attributes[field]
+                    ET.SubElement(game, field).text = attributes[field]
                     del attributes[field]
             # sort the rest
             for field in sorted(attributes.keys()):
-                elem = ET.SubElement(game, field)
-                elem.text = attributes[field]
+                ET.SubElement(game, field).text = attributes[field]
 
-            dest_root.append(game)                    
-
-            self._gamelist = ET.ElementTree(dest_root)
+        self._gamelist = ET.ElementTree(dest_root)
 
         return 
 
 
-    def save(self):
-        file_time = utils.safe_write_backup(self._path)
+    def save(self, filename=None):
+        if filename is None:
+            filename = self._path
+        file_time = utils.safe_write_backup(filename)
 
         self._indent(space="\t", level=0)
-        with open(self._path, "wb") as fh:
+        with open(filename, "wb") as fh:
             self._gamelist.write(fh, "utf-8")
 
-        return utils.safe_write_check(self._path, file_time)
+        return utils.safe_write_check(filename, file_time)
     
 
     def merg(self, merge_xml: ET.ElementTree):
@@ -145,11 +143,14 @@ class Gamelist:
         root = self._gamelist.getroot()
 
         games = [elem for elem in root if elem.tag == "game"]
-        for game in game:
+        for game in games:
             game_list = []
-            for field in field:
+            for field in fields:
+                if field == "system":
+                    game_list.append(self._system)
+                    continue
                 game_field = game.find(field)
-                if game_field:
+                if game_field is not None:
                     game_list.append(game_field.text)
                 else:
                     game_list.append("")
@@ -163,7 +164,7 @@ class Gamelist:
         media = {}
         for media_type in media_types:
             paths = []
-            elements = self._gamelist.findall(f".//game[{media_type}]")
+            elements = self._gamelist.findall(f"./game/{media_type}")
             for element in elements:
                 if element.text is None or element.text.strip() == "":
                     continue
@@ -177,7 +178,7 @@ class Gamelist:
     
     def get_roms(self):
         roms = []
-        elements = self._gamelist.findall(f".//game[path]")
+        elements = self._gamelist.findall(f"./game/path")
         for element in elements:
             rom = utils.get_system_shortname(self._system, element.text)
             if element not in roms:
