@@ -1,2 +1,0 @@
-# RickDangerousUtilities
-Utilities for RickDangerous
