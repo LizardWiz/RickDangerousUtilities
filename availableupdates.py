@@ -9,13 +9,14 @@ import json
 import utils
 import re
 
-mega = Mega()
 
 class AvailableUpdates:
-    def __init__(self, megadir: str, status=False):
+    def __init__(self, mega=None, megadir=None, status=False):
+        self._mega = mega
         self._megadir = megadir
         self._updates = {}
-        self._get_available_updates(megadir)
+        if self._megadir:
+            self._get_available_updates(megadir)
 
         return
 
@@ -23,13 +24,31 @@ class AvailableUpdates:
     def updates(self):
         return self._updates
 
+    @property
+    def mega(self):
+        return self._mega
+    
+    @mega.setter
+    def mega(self, value):
+        self._mega = value
+
+    
     def _decrypt_node_key(self, key_str: str, shared_key: str):
         encrypted_key = base64_to_a32(key_str.split(":")[1])
 
         return decrypt_key(encrypted_key, shared_key)
 
 
-    def _get_available_updates(self, megadrive: str, status=False):
+    def _get_file_data(self, file_id: str):
+        for key, value in self._updates.items():
+            if value["file_id"] == file_id:
+                return self._get_file_data_by_folder(file_id, value["root_folder"])
+            
+        return None
+
+
+    def get_available_updates(self, megadrive: str, status=False):
+        self._updates = {}
         if status == True:
             print()
             print("Finding available updates...")
@@ -53,13 +72,18 @@ class AvailableUpdates:
                 attributes["modified_date"] = modified_date
                 attributes["file_size"] = utils.convert_filesize(node["s"])
                 attributes["bytes"] = node["s"]
-                attributes["file_data"] = self._get_file_data(file_id, root_folder)
-                attributes["key"] = k
+                #attributes["file_data"] = self._get_file_data(file_id, root_folder)
+                attributes["root_folder"] = root_folder
+                attributes["key"] = key
 
                 self._updates[file_name] = attributes
 
         return
 
+
+    def get_quota(self):
+        return self._mega.get_quota()
+    
 
     def _parse_folder_url(self, url: str):
         "Returns (public_handle, key) if valid. If not returns None."
@@ -96,7 +120,7 @@ class AvailableUpdates:
         return json_resp[0]["f"]
 
 
-    def _get_file_data(self, file_id: str, root_folder: str):
+    def get_file_data_by_folder(self, file_id: str, root_folder: str):
         data = [{'a': 'g', 'g': 1, 'n': file_id}]
         response = requests.post(
             "https://g.api.mega.co.nz/cs",
@@ -106,3 +130,10 @@ class AvailableUpdates:
         )
         json_resp = response.json()
         return json_resp[0]
+
+
+    def download_found(self, file_data: str, file_key: tuple, iv: tuple, meta_mac: tuple, dest_path=None, dest_filename=None, verbose=False):
+        #iv = file_key[4:6] + (0, 0)
+        #meta_mac = file_key[6:8]
+
+        return self._mega._execute_download(file_data, file_key, iv, meta_mac, dest_path=dest_path, dest_filename=dest_filename, verbose=verbose)

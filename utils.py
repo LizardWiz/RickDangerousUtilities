@@ -56,3 +56,20 @@ def convert_filesize(file_size: str, unit="B"):
         retval = str(round(filesize, count - 1)) + " " + units[count]
 
     return retval
+
+
+def log_this(log_file: str, log_text: str, overwrite=False):
+    if log_file is None:
+        return
+
+    if not os.path.isdir(os.path.dirname(log_file)):
+        os.makedirs(os.path.dirname(log_file))
+
+    if overwrite == True or not os.path.isfile(log_file):
+        with open(log_file, 'w', encoding='utf-8') as logfile:
+            logfile.write(log_text.strip() + "\n")
+    else:
+        with open(log_file, 'a', encoding='utf-8') as logfile:
+            logfile.write(log_text.strip() + "\n")
+
+    return

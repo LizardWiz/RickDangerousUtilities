@@ -39,7 +39,7 @@ d.autowidgetsize = True
 
 logger = logging.getLogger(__name__)
 update_available_result = "no connection"
-tool_ini = "/userdata/.utilities_tool/update_tool.ini"
+tool_ini = "/userdata/.utilities_tool/rd_utilities.ini"
 
 genres = {}
 

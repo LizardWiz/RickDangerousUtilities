@@ -556,7 +556,7 @@ class Mega:
             for file in files:
                 post_list.append({"a": "d", "n": file, "i": self.request_id})
             return self._api_request(post_list)
-
+    
     def download(self, file, dest_path=None, dest_filename=None):
         """
         Download a file by it's file object
@@ -643,15 +643,32 @@ class Mega:
             dest_path=dest_path,
             dest_filename=dest_filename,
             is_public=True,
+            verbose=False
         )
 
+    def download_file(self,
+            file_handle,
+            file_key,
+            file_data,
+            dest_path=None, 
+            dest_filename=None,
+            verbose=False):
+        
+        k = (file_key[0] ^ file_key[4], file_key[1] ^ file_key[5],
+        file_key[2] ^ file_key[6], file_key[3] ^ file_key[7])
+        iv = file_key[4:6] + (0, 0)
+        meta_mac = file_key[6:8]
+    
+        return self._execute_download(file_data, k, iv, meta_mac, dest_path=dest_path, dest_filename=dest_filename, verbose=verbose)
+        
     def _download_file(self,
                        file_handle,
                        file_key,
                        dest_path=None,
                        dest_filename=None,
                        is_public=False,
-                       file=None):
+                       file=None, 
+                       verbose=False):
         if file is None:
             if is_public:
                 file_key = base64_to_a32(file_key)
@@ -740,7 +757,7 @@ class Mega:
                 logger.info('%s of %s downloaded', file_info.st_size,
                             file_size)
                 if verbose:
-                    print("\t{}% complete: [{}>{}]".format((file_info.st_size / file_size) * 100 if (file_info.st_size / file_size) * 100 < 100 else 99, "="*(file_info.st_size / file_size) * 100, " "*(99 - (file_info.st_size / file_size) * 100)), end = "\r")
+                    print(f"\t{int((file_info.st_size / file_size) * 100) if (file_info.st_size / file_size) * 100 < 100 else 99}% complete: [{'='*int((file_info.st_size / file_size) * 100)}>{' '*int(99 - (file_info.st_size / file_size) * 100)}]", end = "\r")
             file_mac = str_to_a32(mac_str)
             # check mac integrity
             if (file_mac[0] ^ file_mac[1],
@@ -750,7 +767,7 @@ class Mega:
             temp_output_file.close()
             shutil.move(temp_output_file.name, output_path)
             if verbose:
-                print("\t100% complete: [{}]".format("="*100))
+                print(f"\t100% complete: [{'='*100}]")
             return output_path
 
     def upload(self, filename, dest=None, dest_filename=None):
