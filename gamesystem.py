@@ -1,5 +1,11 @@
 import re
 import os
+import subprocess
+import time
+import zipfile
+import utils
+import datetime
+from inifile import IniFile
 
 class GameSystem:
     def __init__(self, system: str):
@@ -14,6 +20,42 @@ class GameSystem:
     @property
     def filetypes(self):
         return self._filetypes
+    
+    def extract_zipfile(zip_file: str, ini_file: IniFile):
+        start_time = datetime.datetime(datetime.timezone.utc)
+        total_size = 0
+        last_size = 0
+        current_size = 0
+        dir_name = f'{ini_file.get_config_value("CONFIG_ITEMS", "tmp_directory")}/{ini_file.get_config_value("CONFIG_ITEMS", "extract_directory")}'
+
+        with zipfile.ZipFile(zip_file, 'r') as zip_ref:
+            total_size = sum([zinfo.file_size for zinfo in zip_ref.filelist])
+
+        if os.path.isdir(dir_name):
+            os.system(f"sudo rm -rf {dir_name} > /tmp/test")
+            #shutil.rmtree(dir_name)
+        os.mkdir(dir_name)
+        proc = subprocess.Popen(["/usr/bin/unzip", "-q", zip_file, "-d", dir_name])
+
+        while proc.poll() == None:
+            result = subprocess.run(["/usr/bin/du", "-sb", dir_name], stdout=subprocess.PIPE)
+            current_size = int(result.stdout.split()[0])
+            utils.status_bar(total_size, current_size, start_time)
+            time.sleep(.5)
+            
+        if proc.returncode > 1:
+            return False
+            
+        utils.status_bar(total_size, current_size, start_time, complete=True)
+
+        return True
+        
+    def _update_config(self, extracted: str):
+        return
+
+    def process_improvement(self, file: str, ini_file: IniFile, status=True, auto_clean=False, official=True):
+        return True
+
 
 class BatoceraGameSystem(GameSystem):
     def __init__(self, system: str):
@@ -45,4 +87,8 @@ class BatoceraGameSystem(GameSystem):
                                     file_types.append(item.strip())
 
         return file_types
+    
+
+    #def extract_zipfile(zip_file: str, ini_file: IniFile):
+    #    return super().extract_zip_file(zip_file, ini_file)
    

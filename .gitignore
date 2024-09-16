@@ -5,5 +5,4 @@ __pycache__/
 /config.ini
 /update_tool.ini
 .vscode/launch.json
-*.ini
 *.log

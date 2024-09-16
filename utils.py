@@ -73,3 +73,67 @@ def log_this(log_file: str, log_text: str, overwrite=False):
             logfile.write(log_text.strip() + "\n")
 
     return
+
+
+def status_bar(total_size: float, current_size: float, start_time: datetime, complete=False, start_char="\t"):
+    current_time = datetime.datetime.utcnow()
+    percent_complete = round((current_size / total_size) * 100)
+    if percent_complete > 99 and not complete:
+        percent_complete = 99
+    kbs = return_bps(current_size, (current_time - start_time).total_seconds())
+    pad = (12 - len(kbs))
+
+    if not complete:
+        print(f"{start_char}{percent_complete if percent_complete < 100 else 99}% complete: [{'='*percent_complete}>{' '*(99 - percent_complete)}] ({kbs}) (total elapsed time: {str(current_time - start_time)[:-7]}){' '*pad}", end = "\r")
+    else:
+        print(f"{start_char}100% complete: [{'='*100}] ({kbs}) (total elapsed time: {str(current_time - start_time)[:-7]}){' '*pad}")
+
+    return
+
+
+def return_bps(bytes: float, seconds: float):
+    retval = ""
+    units = ["B", "KB", "MB", "GB"]
+    unit = "B"
+    count = 0
+    filesize = bytes / seconds
+    while (filesize) >= 1000:
+        count += 1
+        filesize /= 1024
+
+    if count == 0:
+        retval = "%0.2f" % filesize + " " + unit + "/s"
+    else:
+        retval = "%0.2f" % filesize + " " + units[count] + "/s"
+
+    return retval    
+
+
+def clean_path(path: str):
+    # god what a lazy hack
+    return path.replace("//", "/")
+
+
+def prepare_script(script: str):
+    commands = []
+
+    if os.path.isfile(script):
+        with open(script, 'r', encoding='utf-8') as file:
+            lines = file.readlines()
+
+            for line in lines:
+                if line.strip()[0:1] == "#":
+                    continue
+                if len(line.strip()) == 0:
+                    continue
+                commands.append(line.strip())
+
+    return lines
+
+
+def get_dict_key_by_value(in_dict: dict, value):
+    for key, val in in_dict.items():
+        if val == value:
+            return key
+        
+    return None

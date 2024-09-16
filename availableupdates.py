@@ -8,22 +8,30 @@ import requests
 import json
 import utils
 import re
+import os
+from datetime import datetime, timezone
+from inifile import IniFile
 
 
 class AvailableUpdates:
-    def __init__(self, mega=None, megadir=None, status=False):
+    def __init__(self, mega=None, megadir=None, status=False, ini_file=None):
         self._mega = mega
         self._megadir = megadir
+        self._dirs = {}
         self._updates = {}
-        if self._megadir:
-            self._get_available_updates(megadir)
+        self._ini = None
+        if self._megadir and ini_file:
+            if type(ini_file) == "IniFile":
+                self._ini.set_type("update")
+                self._ini = self._get_mega_ini(megadir)
+                self.get_available_updates(megadir, ini_file)
 
         return
 
     @property
-    def updates(self):
-        return self._updates
-
+    def ini(self):
+        return self._ini
+    
     @property
     def mega(self):
         return self._mega
@@ -33,6 +41,39 @@ class AvailableUpdates:
         self._mega = value
 
     
+    def _get_directory_type(self, parent: str):
+        ret = "all"
+
+        for key, val in self._dirs.items():
+            if val != parent:
+                continue
+            ret = key
+            break
+
+        return ret
+        
+
+    def _get_mega_ini(self, megadir: str, ini_file: IniFile):
+        parts = megadir.split("/")
+        index = 0
+        filename = ""
+        for part in parts:
+            if part == "folder":
+                filename = parts[index + 1].split("#")[0] + ".ini"
+                break
+            
+            index += 1
+
+        if len(filename) > 0:
+            if not os.path.isfile(filename):
+                with open(filename, 'w') as file:
+                    file.write("")
+
+            return IniFile(filename)
+
+        return None
+
+
     def _decrypt_node_key(self, key_str: str, shared_key: str):
         encrypted_key = base64_to_a32(key_str.split(":")[1])
 
@@ -47,7 +88,10 @@ class AvailableUpdates:
         return None
 
 
-    def get_available_updates(self, megadrive: str, status=False):
+    def get_available_updates(self, megadrive: str, ini_file: 'IniFile', status=False):
+        self._megadir = megadrive
+        self._ini = self._get_mega_ini(megadrive, ini_file)
+        self._ini.set_type("update")
         self._updates = {}
         if status == True:
             print()
@@ -65,6 +109,7 @@ class AvailableUpdates:
             attrs = decrypt_attr(base64_url_decode(node["a"]), k)
             file_name = attrs["n"]
             file_id = node["h"]
+            parent = node["p"]
             modified_date = node["ts"]
             if node["t"] == 0:
                 attributes = {}
@@ -75,8 +120,15 @@ class AvailableUpdates:
                 #attributes["file_data"] = self._get_file_data(file_id, root_folder)
                 attributes["root_folder"] = root_folder
                 attributes["key"] = key
+                attributes["parent"] = parent
+                attributes["applied"] = self._is_update_applied(file_name, modified_date, node["s"], parent, ini_file)
+                attributes["type"] = self._get_directory_type(parent)
 
-                self._updates[file_name] = attributes
+                if parent not in self._updates.keys():
+                    self._updates[parent] = {}
+                self._updates[parent][file_name] = attributes
+            elif node["t"] == 1:
+                self._dirs[file_name] = file_id
 
         return
 
@@ -120,6 +172,39 @@ class AvailableUpdates:
         return json_resp[0]["f"]
 
 
+    def _is_update_applied(self, filename: str, modified_date: int, bytes: int, parent: str, ini_file: 'IniFile'):
+        ret = 1
+        # installed update value is: [installed date]-[modified date]-[file size]
+        section = "INSTALLED_UPDATES"
+        for key, val in self._dirs.items():
+            if val != parent:
+                continue
+            ini_section = ini_file.get_config_value("DIR_SECTIONS", key)
+            break
+
+        value = self._ini.get_config_value(ini_section, filename)
+        if value == None:
+            return 0
+        parts = value.split("-")
+        if len(parts) < 3:
+            self._ini.delete_config_option(ini_section, filename)
+            return 0
+        # installed date < modified date
+        if value[0] > modified_date:
+            ret = -1
+        # modified date not right
+        if value[1] != modified_date:
+            ret = -1
+        # filesize is not right
+        if value[2] != bytes:
+            ret = -1
+
+        if ret == -1:
+            self._ini.set_config_value(ini_section, filename, f"{parts[0]}-{parts[1]}-{parts[2]}-*")
+
+        return ret
+    
+
     def get_file_data_by_folder(self, file_id: str, root_folder: str):
         data = [{'a': 'g', 'g': 1, 'n': file_id}]
         response = requests.post(
@@ -137,3 +222,15 @@ class AvailableUpdates:
         #meta_mac = file_key[6:8]
 
         return self._mega._execute_download(file_data, file_key, iv, meta_mac, dest_path=dest_path, dest_filename=dest_filename, verbose=verbose)
+    
+    def get_updates(self, dir=None):
+        all = {}
+
+        if dir == None:
+            for key in self._dirs.keys():
+                all.update(self._updates[self._dirs[key]])
+        else:
+            if dir in self._dirs:
+                all.update(self._updates[self._dirs[dir]])
+        
+        return all

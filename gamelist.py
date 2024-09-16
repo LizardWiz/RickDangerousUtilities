@@ -1,17 +1,20 @@
 import xml.etree.ElementTree as ET
 import utils as utils
+import os
+from inifile import IniFile
 
 class Gamelist:
-    def __init__(self, gamelist=None, overwrite=False):
+    def __init__(self, gamelist=None, overwrite=False, official=False):
         self._fields = ["name", "path", "desc", "image", "rating", "releasedate", "developer", "publisher", "genre", "players", "playcount", "lastplayed", "favorite"] 
         self._do_not_overwrite = ["playcount", "lastplayed", "favorite"]
         self._overwrite = overwrite
+        self._official_roms = []
         self._path = gamelist if gamelist else None
         self._system = self._get_system(gamelist) if gamelist is not None else None
         if gamelist is None:
             self._gamelist = None
         else:
-            self.parse(gamelist)
+            self.parse(gamelist, official=official)
 
 
     @property
@@ -27,6 +30,17 @@ class Gamelist:
         self._gamelist = value
 
 
+    def _get_roms(self):
+        roms = []
+        elements = self._gamelist.findall(f"./game/path")
+        for element in elements:
+            rom = utils.get_system_shortname(self._system, element.text)
+            if element not in roms:
+                roms.append(rom)
+
+        return roms
+        
+    
     def _get_system(self, path: str):
         parts = path.split("/")
         if len(parts) <= 2:
@@ -113,7 +127,7 @@ class Gamelist:
         return game
     
 
-    def parse(self, gamelist: str):
+    def parse(self, gamelist: str, official=False):
         # this will produce a gamelist with ordered elements
         self._system = self._get_system(gamelist)
         self._path = gamelist
@@ -140,6 +154,9 @@ class Gamelist:
             dest_root.append(game)
 
         self._gamelist = ET.ElementTree(dest_root)
+        if official:
+            self._official_roms = self._get_roms()
+            self._official_roms.sort()
 
         return 
 
@@ -156,7 +173,7 @@ class Gamelist:
         return utils.safe_write_check(filename, file_time)
     
 
-    def merge(self, merge_gamelist: 'Gamelist'):
+    def merge(self, merge_gamelist: 'Gamelist', official=False):
         root = self._gamelist.getroot()
         merge_root = merge_gamelist.gamelist.getroot()
         merge_games = [elem for elem in merge_root if elem.tag == "game"]
@@ -165,6 +182,9 @@ class Gamelist:
             if path is not None:
                 if path.text is None:
                     continue         
+            
+            if path in self._official_roms:
+                continue
 
             game = root.find(f".//game[path=\"{path.text}\"]")
             if game is None:
@@ -182,9 +202,7 @@ class Gamelist:
 
                 element.text = merge_element.text
 
-        merge_gamelist.gamelist = self._gamelist
-
-        return
+        return True
     
 
     def get_games(self, fields: list):
@@ -225,12 +243,18 @@ class Gamelist:
 
         return media
     
-    def get_roms(self):
-        roms = []
-        elements = self._gamelist.findall(f"./game/path")
-        for element in elements:
-            rom = utils.get_system_shortname(self._system, element.text)
-            if element not in roms:
-                roms.append(rom)
 
-        return roms
+    def write_origins(self, ini_file: IniFile):
+        if not len(self._official_roms) > 0:
+            return True
+
+        path = os.path.dirname(self._path)
+        origin_file = ini_file.get_config_value("CONFIG_ITEMS", "origin_file")
+        filename = f"{path}/{origin_file}"
+
+        file_time = utils.safe_write_backup(filename)
+
+        with open(filename, mode="w", encoding="utf-8") as file:
+            file.write("\n".join(self._official_roms))
+
+        return utils.safe_write_check(filename, file_time)

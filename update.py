@@ -2,8 +2,7 @@
 Update Script for Rick Dangerous' Insanium/R.P.E
 https://github.com/h3xp/RickDangerousUpdate
 """
-import sys
-sys.path.insert(0, './packages')
+
 from asyncio import streams
 from genericpath import isdir, isfile
 from http.client import OK
@@ -26,6 +25,7 @@ from mega.errors import RequestError
 import xml.etree.ElementTree as ET
 import datetime
 import shutil
+import sys
 import configparser
 import subprocess
 from dialog import Dialog
@@ -39,10 +39,10 @@ d.autowidgetsize = True
 
 logger = logging.getLogger(__name__)
 update_available_result = "no connection"
-tool_ini = "/userdata/.utilities_tool/rd_utilities.ini"
+tool_ini = "/home/pi/.update_tool/update_tool.ini"
 
 genres = {}
-
+update_being_processed = "None"
 
 def print_files(current_files: dict, file_list: list, log_file: str, spacer="\t", starter="-"):
     for file in file_list:
@@ -50,13 +50,13 @@ def print_files(current_files: dict, file_list: list, log_file: str, spacer="\t"
             values = current_files[file]
             file_sizes = ""
             if values[0] == "ADDED":
-                file_sizes = "(current size: {})".format(values[2])
+                file_sizes = f"(current size: {values[2]})"
             elif values[0] == "UPDATED":
-                file_sizes = "(current size: {}, previous size: {})".format(values[2], values[3])
+                file_sizes = f"(current size: {values[2]}, previous size: {values[3]})"
             elif values[0] == "DELETED":
-                file_sizes = "(previous size: {})".format(values[3])
+                file_sizes = f"(previous size: {values[3]})"
 
-            log_this(log_file, "{}\"{}\"{}{}".format(starter, file, spacer, file_sizes))
+            log_this(log_file, f"{starter}\"{file}\"{spacer}{file_sizes}")
 
     return
 
@@ -66,11 +66,13 @@ def list_info_in_update(current_files: dict, path: str, log_file: str, directori
     files_added = []
     files_deleted = []
     files_updated = []
+    pre_processing = []
+    post_processing = []
 
     log_this(log_file, "")
     log_this(log_file, "")
     log_this(log_file, "**********")
-    log_this(log_file, "Now Processing: \"{}\" [{}]".format(os.path.basename(path), convert_filesize(str(os.path.getsize(path)))))
+    log_this(log_file, f"Now Processing: \"{os.path.basename(path)}\" [{convert_filesize(str(os.path.getsize(path)))}]")
     log_this(log_file, "**********")
 
     with zipfile.ZipFile(path, 'r') as zip_ref:
@@ -90,10 +92,24 @@ def list_info_in_update(current_files: dict, path: str, log_file: str, directori
 
                         current_files[line] = ["DELETED", os.path.basename(path), None, previous_size]
                         files_deleted.append(line)
+                        
+        if "read me pre-process!.txt" in zip_ref.namelist():
+            zip_ref.extract("read me pre-process!.txt", "/tmp")
+            with open("/tmp/read me pre-process!.txt", 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+                for line in lines:
+                    pre_processing.append(line)
+
+        if "read me post-process!.txt" in zip_ref.namelist():
+            zip_ref.extract("read me post-process!.txt", "/tmp")
+            with open("/tmp/read me post-process!.txt", 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+                for line in lines:
+                    post_processing.append(line)
 
         for file_listing in zip_ref.infolist():
             #info_dict = parse_zipinfo(file_listing)
-            #print("{}\t{}".format(file_listing.filename, file_listing.file_size))
+            #print(f"{file_listing.filename}\t{file_listing.file_size}")
             file = "/" + file_listing.filename
             file_dir = get_file_dir(file, directories)
             
@@ -119,6 +135,12 @@ def list_info_in_update(current_files: dict, path: str, log_file: str, directori
         files_deleted = print_sort(files_deleted, directories)
         print_files(current_files, files_deleted, log_file)
 
+    if len(pre_processing) > 0:
+        log_this(log_file, "")
+        log_this(log_file,"PRE-PROCESSING COMMANDS")
+        for pre_cmd in pre_processing:
+            log_this(log_file, pre_cmd)
+
     if len(files_added) > 0:
         log_this(log_file, "")
         log_this(log_file,"ADDED")
@@ -131,13 +153,19 @@ def list_info_in_update(current_files: dict, path: str, log_file: str, directori
         files_updated = print_sort(files_updated, directories)
         print_files(current_files, files_updated, log_file)
 
+    if len(post_processing) > 0:
+        log_this(log_file, "")
+        log_this(log_file,"POST-PROCESSING COMMANDS")
+        for post_cmd in post_processing:
+            log_this(log_file, post_cmd)
+
     return
 
 def get_org_files(dirs: list):
     files = {}
 
     for dir in dirs:
-        print("Getting {}...".format(dir))
+        print(f"Getting {dir}...")
         os.chdir(dir)
         subprocess.check_output(["/bin/bash","-c","find . -ls > /tmp/full_dir_listing.txt"])
 
@@ -232,7 +260,7 @@ def get_parsed_part(line: str, part: int):
 
 
 def get_manual_updates_story():
-    log_file = "/userdata/.utilities_tool/manual_updates_story.txt"
+    log_file = "/home/pi/.update_tool/manual_updates_story.txt"
     dir_list = get_config_value("ALWAYS_OVERWRITE", "relevant_directories")
     directories = dir_list.strip().split(",")
 
@@ -273,7 +301,7 @@ def get_manual_updates_story():
         list_info_in_update(current_files, os.path.join(update_dir, update[0]), log_file, directories)
 
     cls()
-    d.textbox(log_file, title="Contents of {0}".format(log_file))        
+    d.textbox(log_file, title=f"Contents of {log_file}")       
 
     return
 
@@ -348,6 +376,16 @@ def get_overlay_systems():
     return retval
 
 
+def read_ini(ini_file: str):
+    if os.path.isfile(ini_file):
+        config = configparser.ConfigParser()
+        config.optionxform = str
+        config.read(ini_file)
+        return config
+
+    return None
+
+
 def read_config():
     if os.path.exists(tool_ini):
         if os.path.isfile(tool_ini):
@@ -357,11 +395,33 @@ def read_config():
             return config
     return None
     
+
+def get_ini_section(ini_file: str, section: str):
+    config = read_ini(ini_file)
+    if config is not None:
+        if config.has_section(section):
+            return config.items(section)
+
+    return None
+
+
 def get_config_section(section: str):
     config = read_config()
     if config is not None:
         if config.has_section(section):
             return config.items(section)
+
+    return None
+
+
+def get_ini_value(ini_file: str, section: str, key: str, return_none=True):
+    config = read_ini(ini_file)
+    if config is not None:
+        if config.has_option(section, key):
+            return config[section][key]
+
+    if return_none == False:
+        return ""
 
     return None
 
@@ -391,7 +451,7 @@ def retrieve_mega_config(read_config: bool):
     if is_valid_mega_link(mega_dir):
         mega_config = configparser.ConfigParser()
         mega_config.optionxform = str
-        mega_ini = "/userdata/.utilities_tool/mega_{}.ini".format(mega_dir.split("/")[-1])
+        mega_ini = f"/home/pi/.update_tool/mega_{mega_dir.split('/')[-1]}.ini"
         if read_config:
             mega_config.read(mega_ini)
         return mega_config,mega_ini
@@ -551,7 +611,7 @@ def select_notification():
 
         #    if tag == "Theme":
         #        if not cronjob_exists("update_tool"):
-        #            runcmd("( crontab -l 2>/dev/null ; echo '@reboot python3 /userdata/.utilities_tool/notification.py' ) | crontab")
+        #            runcmd("( crontab -l 2>/dev/null ; echo '@reboot python3 /home/pi/.update_tool/notification.py' ) | crontab")
         #        if previous_method == "Tool":
         #            runcmd("sed '/update_tool/d' /opt/retropie/configs/all/autostart.sh >/tmp/ut.$$ ; mv /tmp/ut.$$ /opt/retropie/configs/all/autostart.sh")
 
@@ -582,14 +642,14 @@ def is_update_applied(key: str, modified_timestamp: str):
 def uninstall():
     git_repo = get_git_repo()
     git_branch = get_git_branch()
-    runcmd("bash <(curl '{}/{}/install.sh' -s -N) -remove".format(git_repo, git_branch))
+    runcmd(f"bash <(curl '{git_repo}/{git_branch}/install.sh' -s -N) -remove")
     return
 
 
 def update():
     git_repo = get_git_repo()
     git_branch = get_git_branch()
-    runcmd("bash <(curl '{}/{}/install.sh' -s -N) -update".format(git_repo, git_branch))
+    runcmd(f"bash <(curl '{git_repo}/{git_branch}/install.sh' -s -N) -update")
     return
 
 
@@ -597,8 +657,42 @@ def install():
     git_repo = get_git_repo()
     git_branch = get_git_branch()
     megadrive = check_drive()
-    runcmd("bash <(curl '{}/{}/install.sh' -s -N) {}".format(git_repo, git_branch, megadrive))
+    runcmd(f"bash <(curl '{git_repo}/{git_branch}/install.sh' -s -N) {megadrive}")
     return
+
+
+def status_bar(total_size: float, current_size: float, start_time: datetime, complete=False, start_char="\t"):
+    current_time = datetime.datetime.utcnow()
+    percent_complete = round((current_size / total_size) * 100)
+    if percent_complete > 99 and not complete:
+        percent_complete = 99
+    kbs = return_bps(current_size, (current_time - start_time).total_seconds())
+    pad = (12 - len(kbs))
+
+    if not complete:
+        print(f"{start_char}{percent_complete if percent_complete < 100 else 99}% complete: [{'='*percent_complete}>{' '*(99 - percent_complete)}] ({kbs}) (total elapsed time: {str(current_time - start_time)[:-7]}){' '*pad}", end = "\r")
+    else:
+        print(f"{start_char}100% complete: [{'='*100}] ({kbs}) (total elapsed time: {str(current_time - start_time)[:-7]}){' '*pad}")
+
+    return
+
+
+def return_bps(bytes: float, seconds: float):
+    retval = ""
+    units = ["B", "KB", "MB", "GB"]
+    unit = "B"
+    count = 0
+    filesize = bytes / seconds
+    while (filesize) >= 1000:
+        count += 1
+        filesize /= 1024
+
+    if count == 0:
+        retval = "%0.2f" % filesize + " " + unit + "/s"
+    else:
+        retval = "%0.2f" % filesize + " " + units[count] + "/s"
+
+    return retval    
 
 
 def download_file(file_handle,
@@ -611,6 +705,8 @@ def download_file(file_handle,
     iv = file_key[4:6] + (0, 0)
     meta_mac = file_key[6:8]
 
+    start_time = datetime.datetime.utcnow()
+
     # Seems to happens sometime... When this occurs, files are
     # inaccessible also in the official also in the official web app.
     # Strangely, files can come back later.
@@ -620,7 +716,7 @@ def download_file(file_handle,
     file_size = file_data['s']
     attribs = base64_url_decode(file_data['at'])
     attribs = decrypt_attr(attribs, k)
-    print("\t{}% complete: [>{}]".format(0, " "*99), end = "\r")
+    print(f"\t{0}% complete: [>{' '*99}]", end = "\r")
     file_name = attribs['n']
 
     input_file = requests.get(file_url, stream=True).raw
@@ -644,8 +740,9 @@ def download_file(file_handle,
         iv_str = a32_to_str([iv[0], iv[1], iv[0], iv[1]])
         i = None
         for chunk_start, chunk_size in get_chunks(file_size):
-            percent_complete = round(((chunk_start + chunk_size) / file_size) * 100)
-            print("\t{}% complete: [{}>{}]".format(percent_complete if percent_complete < 100 else 99, "="*percent_complete, " "*(99 - percent_complete)), end = "\r")
+            #percent_complete = round(((chunk_start + chunk_size) / file_size) * 100)
+            #print(f"\t{percent_complete if percent_complete < 100 else 99}% complete: [{'='*percent_complete}>{' '*(99 - percent_complete)}]", end = "\r")
+            status_bar(file_size, (chunk_start + chunk_size), start_time)
 
             chunk = input_file.read(chunk_size)
             chunk = aes.decrypt(chunk)
@@ -680,7 +777,8 @@ def download_file(file_handle,
                 file_mac[2] ^ file_mac[3]) != meta_mac:
             raise ValueError('Mismatched mac')
         output_path = Path(dest_path + file_name)
-    print("\t100% complete: [{}]".format("="*100))
+    #print(f"\t100% complete: [{'='*100}]")
+    status_bar(file_size, file_size, start_time, complete=True)
     shutil.move(temp_output_file.name, output_path)
     return output_path
 
@@ -700,16 +798,12 @@ def get_file_data(file_id: str, root_folder: str):
 # def get_nodes_in_shared_folder(root_folder: str) -> dict:
 def get_nodes_in_shared_folder(root_folder: str):
     data = [{"a": "f", "c": 1, "ca": 1, "r": 1}]
-    try:
-        response = requests.post(
-            "https://g.api.mega.co.nz/cs",
-            params={'id': 0,  # self.sequence_num
-                    'n': root_folder},
-            data=json.dumps(data)
-        )
-    except requests.exceptions.RequestException as e:
-        print(e)
-    #print(response)
+    response = requests.post(
+        "https://g.api.mega.co.nz/cs",
+        params={'id': 0,  # self.sequence_num
+                'n': root_folder},
+        data=json.dumps(data)
+    )
     json_resp = response.json()
     return json_resp[0]["f"]
 
@@ -799,7 +893,7 @@ def download_update(ID, destdir, megadrive, size):
         attrs = decrypt_attr(base64_url_decode(node["a"]), k)
         file_id = node["h"]
         if file_id == ID:
-            print("Downloading: {} ({})...".format(attrs["n"], size))
+            print(f"Downloading: {attrs['n']} ({size})...")
             file_data = get_file_data(file_id, root_folder)
             file_path = download_file(file_id, key, file_data, str(destdir))
 
@@ -870,9 +964,47 @@ def clear_do_not_overwrite_tags(gamelist: str):
     if os.path.isfile(gamelist):
         os.rename(gamelist, org_gamelist)
         if os.path.isfile(org_gamelist):
-            runcmd("grep -e \<lastplayed\> -e \<playcount\> -e \<favorite\> -v {} > {}".format(org_gamelist, gamelist))
+            runcmd(f"grep -e \<lastplayed\> -e \<playcount\> -e \<favorite\> -v {org_gamelist} > {gamelist}")
             if os.path.isfile(gamelist):
                 os.remove(org_gamelist)
+
+    return
+
+
+def clean_recent(collection: str):
+    paths = []
+
+    if os.path.exists(collection):
+        with open(collection, 'r', encoding='utf-8') as file:
+            lines = file.readlines()
+
+        for line in lines:
+            line = line.strip()
+            if line + "\n" not in paths and os.path.isfile(line):
+                paths.append(line + "\n")
+
+        paths.sort()
+
+        with open(collection, 'w', encoding='utf-8') as file:
+            file.writelines(paths)
+
+    return
+
+
+def write_all_roms(gamelist: str, full_path: str, collection: str):
+    paths = []
+    src_tree = ET.parse(gamelist)
+    src_root = src_tree.getroot()
+
+    for src_game in src_root.iter("game"):
+        path = get_node(src_game, "path", return_none=True).strip()
+        if path is not None:
+            paths.append(os.path.join(full_path, os.path.basename(path)) + "\n")
+
+    paths.sort()
+
+    with open(collection, 'a', encoding='utf-8') as file:
+        file.writelines(paths)
 
     return
 
@@ -913,24 +1045,23 @@ def clean_emulators_cfg(items: dict, log_file: str, check=False):
             if not os.path.isdir(system_dir):
                 bad_entries += 1
                 if check == False:
-                    log_this(log_file, "Removed Entry: \"{}\" (invalid directory \"{}\")".format(item, system_dir))
+                    log_this(log_file, f"Removed Entry: \"{item}\" (invalid directory \"{system_dir}\")")
                 else:
-                    log_this(log_file, "Invalid Entry: \"{}\" (invalid directory \"{}\")".format(item, system_dir))
+                    log_this(log_file, f"Invalid Entry: \"{item}\" (invalid directory \"{system_dir}\")")
 
                 continue
             for file in os.scandir(system_dir):
-                if os.path.isfile(file.path):
-                    pos = file.path.rfind(".")
-                    emulator_cfg_name = get_emulators_cfg_filename(file.path[:pos].strip().replace(system_dir + "/", ""))
-                    system_roms.append(emulator_cfg_name)
+                pos = file.path.rfind(".")
+                emulator_cfg_name = get_emulators_cfg_filename(file.path[:pos].strip().replace(system_dir + "/", ""))
+                system_roms.append(emulator_cfg_name)
         if item[len(parts[0]) + 1:] in system_roms:
             cleaned[item] = items[item]
         else:
             bad_entries += 1
             if check == False:
-                log_this(log_file, "Removed Entry: \"{}\" (rom for \"{}\" does not exist)".format(item, item[len(parts[0]) + 1:]))
+                log_this(log_file, f"Removed Entry: \"{item}\" (rom for \"{item[len(parts[0]) + 1:]}\" does not exist)")
             else:
-                log_this(log_file, "Invalid Entry: \"{}\" (rom for \"{}\" does not exist)".format(item, item[len(parts[0]) + 1:]))
+                log_this(log_file, f"Invalid Entry: \"{item}\" (rom for \"{item[len(parts[0]) + 1:]}\" does not exist)")
 
     return cleaned, bad_entries
 
@@ -957,7 +1088,7 @@ def filter_official_emulators_cfg(items: list):
 
 def merge_emulators_cfg(directory):
     emulators_cfg = os.path.join(str(directory), "opt/retropie/configs/all/emulators.cfg")
-    override_cfg = "/userdata/.utilities_tool/override_emulators.cfg"
+    override_cfg = "/home/pi/.update_tool/override_emulators.cfg"
 
     if not os.path.isfile(emulators_cfg):
         return
@@ -1008,10 +1139,39 @@ def get_package_date(file: str):
     return datetime.datetime.fromisoformat("1900-01-01T00:00:00")
 
 
+def get_retropie_cores():
+    cores = []
+    found = False
+    val = subprocess.check_output(["/bin/bash", "-c", "sudo /home/pi/RetroPie-Setup/retropie_packages.sh | less"])
+    lines = val.decode("utf-8").split(str("\n"))
+    for line in lines:
+        if not found:
+            if line[0:10:] == "----------":
+                found = True
+        else:
+            parts = line.split(":")
+            if len(parts) == 3:
+                cores.append(parts[0].strip())
+
+    return cores
+
+
 def install_emulators(directory):
+    if len(list(Path(directory).rglob('retropie.pkg'))) == 0:
+        return
+    # get official cores
+    cores = get_retropie_cores()
     # check if retropie.pkg files exist
     for package in Path(directory).rglob('retropie.pkg'):
-        os.system("sudo chown -R pi:pi {} > /tmp/test".format(os.path.dirname(package)))
+        package_dir = os.path.dirname(package)
+        if "/opt/retropie/libretrocores" in package_dir:
+            if os.path.basename(package_dir) not in cores:
+                # I took this out of check_root
+                if not os.path.isdir(f"/opt/retropie/libretrocores/{os.path.basename(package_dir)}"):
+                    os.system(f"sudo mkdir /opt/retropie/libretrocores/{os.path.basename(package_dir)} > /tmp/test")
+                os.system(f"sudo chown -R pi:pi /opt/retropie/libretrocores/{os.path.basename(package_dir)} > /tmp/test")
+                return
+        os.system(f"sudo chown -R pi:pi {os.path.dirname(package)} > /tmp/test")
         local_package = str(package).replace(str(directory), "")
         if os.path.isfile(local_package):
             if get_package_date(str(package)) <= get_package_date(local_package):
@@ -1021,30 +1181,42 @@ def install_emulators(directory):
         # get the core
         dirs = str(package).split("/")
         core = dirs[len(dirs) - 2]
-        print("Now installing {} from bin...".format(core))
-        runcmd("sudo /home/pi/RetroPie-Setup/retropie_packages.sh {} depends".format(core))
-        runcmd("sudo /home/pi/RetroPie-Setup/retropie_packages.sh {} install_bin".format(core))
+        print(f"Now installing {core} from bin...")
+        runcmd(f"sudo /home/pi/RetroPie-Setup/retropie_packages.sh {core} depends")
+        runcmd(f"sudo /home/pi/RetroPie-Setup/retropie_packages.sh {core} install_bin")
+        runcmd(f"sudo /home/pi/RetroPie-Setup/retropie_packages.sh {core} configure")
         os.remove(str(package))
 
     return
 
 
-def merge_gamelist(directory):
+def merge_gamelist(directory: str, official: bool):
     # get origin file
     origin = get_config_value("CONFIG_ITEMS", "origin_file")
+    print_status = True
     
     # check if gamelist.xml has been updated
     for gamelist in Path(directory).rglob('gamelist.xml'):
+        # better statusing
+        if print_status:
+            print("Merging gamelists...")
+            print_status = False
         clear_do_not_overwrite_tags(str(gamelist))
         # find corresponding xmls
         corr = gamelist.parts
         corr = corr[corr.index('extracted')+1:]
         corr = Path("/", *corr)
-        if origin is not None:
+        if official and origin is not None:
             write_origins(str(gamelist), str(gamelist).replace("gamelist.xml", origin))
         if os.path.isfile(corr):
-            merge_xml(str(gamelist), str(corr))
+            if "/home/pi/RetroPie/roms/" in str(corr):
+                merge_xml(str(gamelist), str(corr), "/opt/retropie/configs/all/emulationstation/collections/custom-zzz-recent.cfg")
+            else:
+                merge_xml(str(gamelist), str(corr))
+            
             os.remove(str(gamelist))
+        else:
+            write_all_roms(str(gamelist), str(corr).replace("gamelist.xml", ""), "/opt/retropie/configs/all/emulationstation/collections/custom-zzz-recent.cfg")
 
     return
 
@@ -1075,7 +1247,7 @@ def indent(tree, space="  ", level=0):
     _indent_children(tree, 0)
     
 
-def merge_xml(src_xml: str, dest_xml: str):
+def merge_xml(src_xml: str, dest_xml: str, collection=None):
     file_time = datetime.datetime.utcnow().strftime("%Y%m%d-%H%M%S")
 
     do_not_overwrite = ["favorite", "lastplayed", "playcount"]
@@ -1093,8 +1265,13 @@ def merge_xml(src_xml: str, dest_xml: str):
             if src_path.text is None:
                 continue
             
-            parents = dest_tree.findall(".//game[path=\"{}\"]".format(src_path.text))
+            parents = dest_tree.findall(f".//game[path=\"{src_path.text}\"]")
             if len(parents) == 0:
+                # add the new game to the recently added collection if it is passed
+                if collection is not None:
+                    with open(collection, 'a', encoding='utf-8') as additions:
+                        additions.write(str(dest_xml).replace("gamelist.xml", str(src_path.text).replace("./", "")) + "\n")
+                    
                 dest_root.append(ET.fromstring("<game></game>"))
                 parent = dest_root[len(dest_root) -1]
                 for src_node in src_game:
@@ -1130,14 +1307,39 @@ def make_deletions(directory):
     if os.path.isfile(directory):
         f = open(directory, 'r' )
         for lines in f:
-            if os.path.isfile(lines.rstrip()):
+            if os.path.islink(lines.rstrip()):
+                os.unlink(lines.rstrip())
+            elif os.path.isfile(lines.rstrip()):
                 os.remove(lines.rstrip())
             elif os.path.isdir(lines.rstrip()):
                 shutil.rmtree(lines.rstrip())
         f.close()
         os.remove(directory)
 
+def prepare_script(directory, script_name):
+    actual_script = ""
+    directory = directory / script_name
+    if os.path.isfile(directory):
+        actual_script = f"/tmp/{script_name}"
+        shutil.move(directory, actual_script)
 
+    return actual_script
+
+def execute_script(script_name, update_name):
+    if os.path.isfile(script_name):
+        os.system(f"dos2unix '{script_name}' > /tmp/test")
+        print("Executing ...", script_name)
+        result = subprocess.run(["/bin/bash",script_name], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        err_text = result.stderr.decode('utf-8')
+        if err_text != "":
+            log_this("/home/pi/.update_tool/exception.log", f"*****\nDate: {datetime.datetime.utcnow()}\nstderr from {script_name} of {update_name}\n\n{err_text}\n\n")
+            cls()
+            code = d.msgbox(f"\n{err_text}\nLogged to /home/pi/.update_tool/exception.log\n", title = f"Error(s) reported from '{os.path.basename(script_name)}' of '{os.path.basename(update_name)}'", extra_button=True, extra_label="Abort and Exit")
+            cls()
+
+            if code == d.EXTRA:
+                exit(0)
+        
 def check_internet():
     url = "http://www.google.com/"
     try:
@@ -1267,7 +1469,7 @@ def get_system_extentions(system: str):
     src_tree = ET.parse(systems_config)
     src_root = src_tree.getroot()
 
-    parents = src_tree.findall(".//system[name=\"{}\"]".format(system))
+    parents = src_tree.findall(f".//system[name=\"{system}\"]")
     for parent in parents:
         src_node = parent.find("extension")
         if src_node is not None:
@@ -1394,9 +1596,9 @@ def process_cue_file(cue_file: str, src_game: ET.Element, src_tree: ET.ElementTr
         bad_files.sort()
         for file in bad_files:
             if len(m3u_file) > 0:
-                log_this(log_file, "-cue entry \"{}\" not found for cue file \"{}\" from within m3u file \"{}\"".format(file, os.path.basename(cue_file), m3u_file))
+                log_this(log_file, f"-cue entry \"{file}\" not found for cue file \"{os.path.basename(cue_file)}\" from within m3u file \"{m3u_file}\"")
             else:
-                log_this(log_file, "-cue entry \"{}\" not found for cue file \"{}\"".format(file, os.path.basename(cue_file)))
+                log_this(log_file, f"-cue entry \"{file}\" not found for cue file \"{os.path.basename(cue_file)}\"")
 
         return False
     else:
@@ -1406,6 +1608,20 @@ def process_cue_file(cue_file: str, src_game: ET.Element, src_tree: ET.ElementTr
                 del cue_files[index]    
 
     return True
+
+
+def get_recursive_m3u_files(m3u_file: str, system_rom_directory: str):
+    # this function get's all files, including .cue files contents, of an .m3u file
+    files = []
+    files = parse_m3u_file(m3u_file, system_rom_directory)
+
+    for file in files:
+        if os.path.splitext(file)[1] == ".cue":
+            cue_files = parse_cue_file(file)
+            if len(cue_files) > 0:
+                files.extend(cue_files)
+
+    return files
 
 
 def parse_m3u_file(m3u_file: str, system_rom_directory: str):
@@ -1443,7 +1659,7 @@ def process_m3u_file(m3u_file: str, src_game: ET.Element, src_tree: ET.ElementTr
     if len(bad_files) > 0:
         bad_files.sort()
         for file in bad_files:
-            log_this(log_file, "-m3u entry \"{}\" not found for m3u file \"{}\"".format(file, os.path.basename(m3u_file)))
+            log_this(log_file, f"-m3u entry \"{file}\" not found for m3u file \"{os.path.basename(m3u_file)}\"")
     else:
         for file in good_files:
             if file in m3u_files:
@@ -1456,7 +1672,7 @@ def process_m3u_file(m3u_file: str, src_game: ET.Element, src_tree: ET.ElementTr
 def process_supporting_files(src_game: ET.Element, src_name: str, subelement_name: str, system_roms: str, rom_file: str, supporting_files_dir_name: str, supporting_files_dir: str, supporting_files_types: list, supporting_files: list, found_files: list, log_file: str, clean=False):
     def _new_element(src_game: ET.Element, subelement_name: str, log_file: str):
         indent(src_game, "\t")
-        log_this(log_file, "-{} element will now be:".format(subelement_name))
+        log_this(log_file, f"-{subelement_name} element will now be:")
         log_this(log_file, ET.tostring(src_game).decode())
 
     file = ""
@@ -1466,7 +1682,7 @@ def process_supporting_files(src_game: ET.Element, src_name: str, subelement_nam
         if src_node.text is not None:
             # validate file exists
             #relative_file = src_node.text.replace("./", "")
-            #file = relative_file.replace("{}/".format(supporting_files_dir_name), "")
+            #file = relative_file.replace(f"{supporting_files_dir_name}/", "")
             file = os.path.basename(src_node.text)
             #path = os.path.join(supporting_files_dir, file)
             path = src_node.text.replace("./", system_roms + "/")
@@ -1474,47 +1690,47 @@ def process_supporting_files(src_game: ET.Element, src_name: str, subelement_nam
                 path = src_node.text
 
             if not os.path.isfile(path):
-                log_this(log_file, "-{} file \"{}\" (full path \"{}\") does not exist for rom \"{}\" ({})".format(subelement_name, file, path, rom_file, src_name))
+                log_this(log_file, f"-{subelement_name} file \"{file}\" (full path \"{path}\") does not exist for rom \"{rom_file}\" ({src_name})")
                 # remove bad reference
                 if clean == True:
                     src_node.text = None
                 else:
-                    log_this(log_file, "-clean would remove reference to {} file".format(subelement_name))
+                    log_this(log_file, f"-clean would remove reference to {subelement_name} file")
                 # look for file based on rom name
                 file = look_for_supporting_files(rom_file, supporting_files_dir, supporting_files_types)
                 if len(file) > 0:
-                    log_this(log_file, "-{} file found: \"{}\" for rom \"{}\"".format(subelement_name, file, rom_file))
+                    log_this(log_file, f"-{subelement_name} file found: \"{file}\" for rom \"{rom_file}\"")
                     if clean == True:
                         #src_node.text = file
                         src_node.text = file.replace(system_roms, ".")
                         _new_element(src_node, subelement_name, log_file)
                     else:
-                        log_this(log_file, "-clean would add new reference to {} tag".format(subelement_name))
+                        log_this(log_file, f"-clean would add new reference to {subelement_name} tag")
         else:
             # look for file based on rom name
-            log_this(log_file, "-no {} defined for rom \"{}\" ({})".format(subelement_name, rom_file, src_name))
+            log_this(log_file, f"-no {subelement_name} defined for rom \"{rom_file}\" ({src_name})")
             file = look_for_supporting_files(rom_file, supporting_files_dir, supporting_files_types)
             if len(file) > 0:
-                log_this(log_file, "-{} file found: \"{}\" for rom \"{}\"".format(subelement_name, file, rom_file))
+                log_this(log_file, f"-{subelement_name} file found: \"{file}\" for rom \"{rom_file}\"")
                 if clean == True:
                     #src_node.text = file
                     src_node.text = file.replace(system_roms, ".")
                     _new_element(src_node, subelement_name, log_file)
                 else:
-                    log_this(log_file, "-clean would add new reference to {} tag".format(subelement_name))
+                    log_this(log_file, f"-clean would add new reference to {subelement_name} tag")
     else:
         # look for file based on rom name and add to element tree if it exists
-        log_this(log_file, "-no {} element defined in gamelist.xml for rom \"{}\"".format(subelement_name, rom_file))
+        log_this(log_file, f"-no {subelement_name} element defined in gamelist.xml for rom \"{rom_file}\"")
         file = look_for_supporting_files(rom_file, supporting_files_dir, supporting_files_types)
         if len(file) > 0:
-            log_this(log_file, "-{} file found: \"{}\" for rom \"{}\"".format(subelement_name, file, rom_file))
+            log_this(log_file, f"-{subelement_name} file found: \"{file}\" for rom \"{rom_file}\"")
             if clean == True:
                 child = ET.SubElement(src_game, subelement_name)
-                #child.text = "./{}/{}".format(supporting_files_dir, file)
+                #child.text = f"./{supporting_files_dir}/{file}"
                 child.text = file.replace(system_roms, ".")
                 _new_element(child, subelement_name, log_file)
             else:
-                log_this(log_file, "-clean would add new reference to {} tag".format(subelement_name))
+                log_this(log_file, f"-clean would add new reference to {subelement_name} tag")
 
     # delete validated files
     file = os.path.basename(file)
@@ -1528,13 +1744,125 @@ def process_supporting_files(src_game: ET.Element, src_name: str, subelement_nam
     return
 
 
+def get_parent_dir(filename: str):
+    parent_dir = ""
+
+    parts = filename.split("/")
+    while "" in parts:
+        index = parts.index("")
+        del parts[index]
+
+    if len(parts) == 1:
+        return "/"
+    
+    for i in range(len(parts) - 1):
+        parent_dir += "/" + parts[i]
+    
+    return parent_dir
+
+
+def process_orphaned_extra_files(system: str, orphaned_files: list, backup_dir: str, log_file: str, clean=False):
+    # this exists because extra files were an afterthough, and are fully pathed
+    # this should probably be what the entire check/clean should be like, but for now we just leave it as is
+    orphaned_directories = []
+    do_not_move = ["/home/pi/RetroPie/roms/scummvm/.bugged", "/home/pi/RetroPie/roms/scummvm/.Other_Langs"]
+
+    orphaned_files.sort()
+    process = "DELETING" if clean == True else "IDENTIFIED"
+
+    # this is a HACK, because atari800 multidisk sucks
+    # we ned to brute force he remainder of .multidisk files to find ophans..
+    if system == "atari800":
+        multidisk_files = []
+        for file in orphaned_files:
+            if "/home/pi/RetroPie/roms/atari800/.multidisk/" in file:
+                multidisk_files.append(file)
+        for file in multidisk_files:
+            # first parse the files were looking for
+            parsed_files = []
+            if os.path.isfile(file):
+                with open(file, 'r') as md_file:
+                    for line in md_file:
+                        if line.strip()[:1] == "#":
+                            continue
+                        if not "/home/pi/RetroPie/roms/atari800" in line:
+                            continue
+                        parsed_files.append(line.strip())      
+            count = 0
+            file_name = os.path.basename(file)
+            file_match = ""
+            while count < len(file_name):
+                if not file_name[count].isalnum():
+                    break
+                file_match += file_name[count]
+                count += 1
+            for rom_file in Path("/home/pi/RetroPie/roms/atari800").glob(file_match + "*"):
+                process_file = True
+                if os.path.splitext(rom_file)[1] == ".zip":
+                    with zipfile.ZipFile(rom_file, 'r') as zip_ref:
+                        for file_listing in zip_ref.infolist():
+                            file_found = False
+                            for parsed_file in parsed_files:
+                                if file_listing.filename in parsed_file:
+                                    file_found = True
+                                    break
+                            process_file &= file_found
+                            if process_file:
+                                break
+                if process_file:
+                    log_this(log_file, f"-\"{file}\" please consider renaming this or change the gamelist \"name\" entry to match the filename...")
+                    if file in orphaned_files:
+                        index = orphaned_files.index(file)
+                        del orphaned_files[index]
+                    for parsed_file in parsed_files:
+                        if parsed_file in orphaned_files:
+                            index = orphaned_files.index(parsed_file)
+                            del orphaned_files[index]
+
+    # now back to the story...
+    for orphaned_file in orphaned_files:
+        if os.path.isdir(orphaned_file):
+            orphaned_directories.append(orphaned_file)
+            continue
+        if not os.path.isfile(orphaned_file):
+            continue
+        backup_file = orphaned_file.replace("/home/pi/RetroPie/roms", backup_dir)
+        log_this(log_file, f"-{process} orphaned extra file: \"{orphaned_file}\"")
+        if clean == True:
+            #os.remove(file_path)
+            if not os.path.exists(os.path.dirname(backup_file)):
+                os.makedirs(os.path.dirname(backup_file))
+            shutil.move(orphaned_file, os.path.dirname(backup_file))
+
+    for orphaned_directory in orphaned_directories:
+        if orphaned_directory in do_not_move:
+            continue
+        backup_directory = orphaned_directory.replace("/home/pi/RetroPie/roms", backup_dir)
+        if system == "atari800":
+            if not os.listdir(orphaned_directory):
+                log_this(log_file, f"-{process} orphaned extra directory because it is empty: \"{orphaned_directory}\"")
+                if clean == True:
+                    shutil.rmtree(orphaned_directory)
+        else:
+            log_this(log_file, f"-{process} orphaned extra directory: \"{orphaned_directory}\"")
+            if clean == True:
+                if not os.path.isdir(get_parent_dir(backup_directory)):
+                    os.makedirs(get_parent_dir(backup_directory))
+                if os.path.isdir(backup_directory):
+                    shutil.rmtree(backup_directory)
+                shutil.copytree(orphaned_directory, backup_directory)
+                shutil.rmtree(orphaned_directory)
+
+    return
+
+
 def process_orphaned_files(orphaned_files: list, dir: str, log_file: str, dir_backup: str, file_type: str, clean=False):
     orphaned_files.sort()
     process = "DELETING" if clean == True else "IDENTIFIED"
     for orphaned_file in orphaned_files:
         file_path = os.path.join(dir, orphaned_file)
         if os.path.exists(file_path):
-            log_this(log_file, "-{} orphaned {} file: \"{}\"".format(process, file_type, file_path))
+            log_this(log_file, f"-{process} orphaned {file_type} file: \"{file_path}\"")
             if clean == True:
                 #os.remove(file_path)
                 if not os.path.exists(dir_backup):
@@ -1545,7 +1873,7 @@ def process_orphaned_files(orphaned_files: list, dir: str, log_file: str, dir_ba
 
 
 def delete_gamelist_entry_dialog(rom: str):
-    code = d.yesno("Gamelist entry for \"{}\" has invalid rom entries (rom files or multi disk files defined in .m3u or .cue file can not be found).\nWould you like to remove it from your gamelist.xml?".format(rom))
+    code = d.yesno(f"Gamelist entry for \"{rom}\" has invalid rom entries (rom files or multi disk files defined in .m3u or .cue file can not be found).\nWould you like to remove it from your gamelist.xml?")
 
     if code == d.OK:
         return True
@@ -1583,7 +1911,7 @@ def override_bad_rom(src_game: ET.Element, src_tree: ET.ElementTree, system_rom_
                         if len(cue_files) > 0:
                             files.extend(cue_files)
 
-        parents = src_tree.findall(".//game[path=\"./{}\"]".format(os.path.basename(src_path)))
+        parents = src_tree.findall(f".//game[path=\"./{os.path.basename(src_path)}\"]")
         for parent in parents:
             file = parent.find("video")
             if file is not None:
@@ -1610,13 +1938,13 @@ def remove_duplicate_gamelist_entries(src_xml: str, log_file: str):
                     roms.append(path.text)
 
     for rom in roms:
-        parents = src_tree.findall(".//game[path=\"{}\"]".format(rom))
+        parents = src_tree.findall(f".//game[path=\"{rom}\"]")
         if parents is not None:
             done = False
             for parent in parents:
                 if done == True:
                     indent(parent)
-                    log_this(log_file, "-removing duplicate gamelist.xml entry for {}".format(os.path.basename(rom)))
+                    log_this(log_file, f"-removing duplicate gamelist.xml entry for {os.path.basename(rom)}")
                     log_this(log_file, ET.tostring(parent).decode())
                     src_root.remove(parent)
                 done = True
@@ -1629,7 +1957,7 @@ def remove_duplicate_gamelist_entries(src_xml: str, log_file: str):
         src_tree.write(fh, "utf-8")
 
     if safe_write_check(src_xml, file_time) == False:
-        log_this(log_file, "-writing to {} FAILED".format(src_xml))
+        log_this(log_file, f"-writing to {src_xml} FAILED")
 
     return
 
@@ -1654,12 +1982,104 @@ def kill_origins(src_xml: str, log_file: str):
         src_tree.write(fh, "utf-8")
 
     if safe_write_check(src_xml, file_time) == False:
-        log_this(log_file, "-writing to {} FAILED".format(src_xml))
+        log_this(log_file, f"-writing to {src_xml} FAILED")
 
     return
 
 
-def process_gamelist(system: str, gamelist_roms_dir: str, log_file: str, backup_dir: str, del_roms=False, del_art=False, del_snaps=False, del_m3u=False, clean=False, auto_clean=False):
+def get_extra_files(system: str, system_roms: str):
+    # these are sort of hacks I think that are pretty specific to Rick's build, unsure really...
+    extra_files = []
+    keep_rom_dirs = ["boxart", "snaps"]
+    if system == "atari800":
+            # atar800 has a fle in .multidisk, with a matching directory in .data
+            # I could parse the file in .multidisk, but I think this is good enough?
+            for item in os.scandir(system_roms + "/.multidisk"):
+                if not os.path.isfile(item.path):
+                    continue
+                extra_files.append(item.path)
+            for item in os.scandir(system_roms + "/.data"):
+                if not os.path.isdir(item.path):
+                    continue
+                extra_files.append(item.path)
+                for file in os.scandir(item.path):
+                    if os.path.isfile(file.path):
+                        extra_files.append(file.path)
+    if system == "scummvm":
+        for item in os.scandir(system_roms):
+            if os.path.isdir(item.path):
+                if item.name not in keep_rom_dirs:
+                    extra_files.append(item.path)
+    if system == "snesmsu1":
+        # this has a om irectory that is in each .sh file
+        # I am just getting all dirs hre, minus boxart/snaps
+        for item in os.scandir(system_roms):
+            if os.path.isdir(item.path):
+                if item.name not in keep_rom_dirs:
+                    extra_files.append(item.path)
+
+    return extra_files
+
+
+def process_extra_files(system:str, system_roms: str, rom_path: str, rom_name: str, extra_files: list):
+    if system == "atari800":
+        # i am looking for an entry in .multidisk folder, with a matching directory in .data folder
+        # i will only keep entry in .data folder if file is found in .multidisk folder
+        multidisk_file = os.path.join(system_roms, ".multidisk", rom_name)
+        if os.path.isfile(multidisk_file):
+            with open(multidisk_file, 'r') as file:
+                for line in file:
+                    if line.strip()[:1] == "#":
+                        continue
+                    if not system_roms in line:
+                        continue
+                    if os.path.isfile(line.strip()):
+                        if line.strip() in extra_files:
+                            index = extra_files.index(line.strip())
+                            del extra_files[index]
+            if multidisk_file in extra_files:
+                index = extra_files.index(multidisk_file)
+                del extra_files[index]
+                multidisk_folder = os.path.join(system_roms, ".data", rom_name)
+    if system == "scummvm":
+        # directoy is stored in "/opt/retropie/configs/scummvm/scummvm.ini"
+        rom_path_name = os.path.splitext(os.path.basename(rom_path))[0]
+        files_dir = get_ini_value("/opt/retropie/configs/scummvm/scummvm.ini", rom_path_name, "path")
+        if files_dir is not None:
+            index = extra_files.index(files_dir)
+            del extra_files[index]
+    if system == "snesmsu1":
+        if os.path.isfile(rom_path):
+            # directory is parsed out of .sh file
+            with open(rom_path, 'r') as file:
+                for line in file:
+                    if line.strip()[:1] == "#":
+                        continue
+                    if not "/home/pi/RetroPie/roms/snesmsu1/" in line:
+                        continue
+                    index = line.find("/home/pi/RetroPie/roms/snesmsu1/")
+                    if index < 0:
+                        continue
+                    file_name = line[index:].strip()
+                    if file_name[-1] == '"' or file_name[-1] == "'":
+                        file_name = file_name[0:len(file_name) -1]
+                    parts = file_name.split("/")
+                    files_dir = ""
+                    for part in parts:
+                        if len(part.strip()) == 0:
+                            continue
+                        if os.path.isdir(files_dir + "/" + part):
+                            files_dir += "/" + part
+                        else:
+                            break
+                    if files_dir in extra_files:
+                        index = extra_files.index(files_dir)
+                        del extra_files[index]                
+
+    return
+
+
+def process_gamelist(system: str, gamelist_roms_dir: str, log_file: str, backup_dir: str, del_roms=False, del_art=False, del_snaps=False, del_m3u=False, del_extra=False, clean=False, auto_clean=False):
     file_time = datetime.datetime.utcnow().strftime("%Y%m%d-%H%M%S")
     rom_dir = "/home/pi/RetroPie/roms"
     art_dir = "boxart"
@@ -1694,6 +2114,7 @@ def process_gamelist(system: str, gamelist_roms_dir: str, log_file: str, backup_
     snaps_files = []
     rom_files = []
     m3u_files = []
+    extra_fles = []
     bad_roms = []
     remove_entries = []
 
@@ -1705,8 +2126,8 @@ def process_gamelist(system: str, gamelist_roms_dir: str, log_file: str, backup_
         return
 
     process = "cleaning" if clean == True else "checking"
-    log_this(log_file, "now {}: {} for rom extensions {}".format(process, system, extensions))
-    print("now {}: {} for rom extensions {}".format(process, system, extensions))
+    log_this(log_file, f"now {process}: {system} for rom extensions {extensions}")
+    print(f"now {process}: {system} for rom extensions {extensions}")
     
     # get rom files
     for item in os.scandir(system_roms):
@@ -1733,6 +2154,9 @@ def process_gamelist(system: str, gamelist_roms_dir: str, log_file: str, backup_
                 if os.path.isfile(item.path):
                     m3u_files.append(item.name)
 
+    # get exta files
+    extra_files = get_extra_files(system, system_roms)
+
     src_xml = os.path.join(system_gamelists, "gamelist.xml")
     if not os.path.exists(src_xml):
         log_this(log_file, "ERROR: gamelist.xml does not exist!")
@@ -1758,9 +2182,12 @@ def process_gamelist(system: str, gamelist_roms_dir: str, log_file: str, backup_
         src_name = ""
         rom_file = ""
         src_name_node = src_game.find("name")
-        if src_name_node is not None:
-            src_name = src_name_node.text
-            print(src_name)
+        if src_name_node is not None:        
+            if src_name_node.text is not None:
+                src_name = src_name_node.text
+                print(src_name)
+            else:
+                continue
 
         # get rom file
         src_node = src_game.find("path")
@@ -1792,7 +2219,7 @@ def process_gamelist(system: str, gamelist_roms_dir: str, log_file: str, backup_
                         else:
                             bad_roms.append(rom_file)
                 else:
-                    log_this(log_file, "-rom \"{}\" (full path \"{}\") does not exist".format(rom_file, rom_path))
+                    log_this(log_file, f"-rom \"{rom_file}\" (full path \"{rom_path}\") does not exist")
                     if rom_file not in bad_roms:
                         bad_roms.append(rom_file)
                     #continue
@@ -1803,6 +2230,9 @@ def process_gamelist(system: str, gamelist_roms_dir: str, log_file: str, backup_
                 # check if snap exists
                 process_supporting_files(src_game, src_name, "video", system_roms, rom_file, snaps_dir, system_snaps, snaps_types, snaps_files, found_files, log_file, clean=clean)
 
+                # deal with extra files
+                process_extra_files(system, system_roms, rom_path, src_name, extra_files)
+
             # check for auto gamelist removal
             if len(found_files) == 0:
                 if rom_file not in remove_entries:
@@ -1810,31 +2240,31 @@ def process_gamelist(system: str, gamelist_roms_dir: str, log_file: str, backup_
 
     # remove entry that shouldn't be there
     for entry in remove_entries:
-        parents = src_tree.findall(".//game[path=\"./{}\"]".format(entry))
+        parents = src_tree.findall(f".//game[path=\"./{entry}\"]")
         for parent in parents:
             if entry in bad_roms:
                 index = bad_roms.index(entry)
                 del bad_roms[index]   
             indent(parent, "\t")
             if clean == True:
-                log_this(log_file, "-auto removing gamelist.xml entry for {} because it has 0 rom, image, or video files".format(entry))
+                log_this(log_file, f"-auto removing gamelist.xml entry for {entry} because it has 0 rom, image, or video files")
             else:
-                log_this(log_file, "-clean would auto remove gamelist.xml entry for {} because it has 0 rom, image, or video files".format(entry))
+                log_this(log_file, f"-clean would auto remove gamelist.xml entry for {entry} because it has 0 rom, image, or video files")
             log_this(log_file, ET.tostring(parent).decode())
             if clean == True:
                 src_root.remove(parent)
 
     # clean out bad roms from gamelist
     for rom_file in bad_roms:
-        parents = src_tree.findall(".//game[path=\"./{}\"]".format(rom_file))
+        parents = src_tree.findall(f".//game[path=\"./{rom_file}\"]")
         for parent in parents:
             if clean == True:
                 if auto_clean == True or delete_gamelist_entry_dialog(rom_file) == True:
-                    log_this(log_file, "-removing gamelist.xml entry for {}".format(rom_file))
+                    log_this(log_file, f"-removing gamelist.xml entry for {rom_file}")
                     log_this(log_file, ET.tostring(parent).decode())
                     src_root.remove(parent)
                 else:
-                    log_this(log_file, "-overridden: removing gamelist.xml entry for {}".format(rom_file))
+                    log_this(log_file, f"-overridden: removing gamelist.xml entry for {rom_file}")
                     log_this(log_file, ET.tostring(parent).decode())
                     #remove good files in bad m3u file from orphans
                     if rom_file in bad_m3us:
@@ -1845,7 +2275,7 @@ def process_gamelist(system: str, gamelist_roms_dir: str, log_file: str, backup_
                                 del m3u_files[index]
             else:
                 indent(parent, "\t")
-                log_this(log_file, "-clean would potentially (unless overridden) remove gamelist.xml entry for {}".format(rom_file))
+                log_this(log_file, f"-clean would potentially (unless overridden) remove gamelist.xml entry for {rom_file}")
                 log_this(log_file, ET.tostring(parent).decode())
                 
     if clean == True:
@@ -1856,7 +2286,7 @@ def process_gamelist(system: str, gamelist_roms_dir: str, log_file: str, backup_
             src_tree.write(fh, "utf-8")
 
         if safe_write_check(src_xml, file_time) == False:
-            log_this(log_file, "-writing to {} FAILED".format(src_xml))
+            log_this(log_file, f"-writing to {src_xml} FAILED")
 
     # clean orphans
     process = "DELETING" if clean == True else "INDENTIFYING"
@@ -1876,13 +2306,14 @@ def process_gamelist(system: str, gamelist_roms_dir: str, log_file: str, backup_
     if del_m3u == True:
         if system not in no_m3u_spport:
             process_orphaned_files(m3u_files, system_m3u, log_file, backup_m3u, "m3u disk", clean=clean)
-        else:
-            log_this(log_file, "-cannot process orphaned files from {} directory because m3u file is not supported for {}".format(m3u_dir, system))
+
+    if del_extra == True:
+        process_orphaned_extra_files(system, extra_files, backup_dir, log_file, clean=clean)
     
     return
 
 
-def do_process_gamelists(systems: list, del_roms=False, del_art=False, del_snaps=False, del_m3u=False, clean=False, log_file="", auto_clean=False):
+def do_process_gamelists(systems: list, del_roms=False, del_art=False, del_snaps=False, del_m3u=False, del_extra=False, clean=False, log_file="", auto_clean=False):
     cls()
     file_time = datetime.datetime.utcnow()
     process_type = "clean" if clean == True else "check"
@@ -1891,19 +2322,19 @@ def do_process_gamelists(systems: list, del_roms=False, del_art=False, del_snaps
     if check_gamelist_roms_dir is not None:
         gamelist_roms_dir = check_gamelist_roms_dir
 
-    if not os.path.exists("/userdata/.utilities_tool/gamelist_logs"):
-        os.mkdir("/userdata/.utilities_tool/gamelist_logs")
+    if not os.path.exists("/home/pi/.update_tool/gamelist_logs"):
+        os.mkdir("/home/pi/.update_tool/gamelist_logs")
 
     if log_file == "":
-        log_file = "/userdata/.utilities_tool/gamelist_logs/{}_gamelists-{}.log".format(process_type, file_time.strftime("%Y%m%d-%H%M%S"))
-    backup_dir = "/userdata/.utilities_tool/gamelist_logs/{}".format(os.path.splitext(os.path.basename(log_file))[0])
+        log_file = f"/home/pi/.update_tool/gamelist_logs/{process_type}_gamelists-{file_time.strftime('%Y%m%d-%H%M%S')}.log"
+    backup_dir = f"/home/pi/.update_tool/gamelist_logs/{os.path.splitext(os.path.basename(log_file))[0]}"
     if clean == True:
         if not os.path.exists(backup_dir):
             os.mkdir(backup_dir)
 
-    log_this(log_file, "{}ING GAMELISTS: started at {}".format(process_type.upper(), file_time))
+    log_this(log_file, f"{process_type.upper()}ING GAMELISTS: started at {file_time}")
     log_this(log_file, "")
-    log_this(log_file, "RUNNING: gamelist.xml files from {}".format(gamelist_roms_dir))
+    log_this(log_file, f"RUNNING: gamelist.xml files from {gamelist_roms_dir}")
     if clean == True:
         if del_roms == True:
             log_this(log_file, "WARNING: deleting roms")
@@ -1919,13 +2350,13 @@ def do_process_gamelists(systems: list, del_roms=False, del_art=False, del_snaps
     for system in systems:
         for single_system in system.split("/"):
             print("")
-            print("Now processing {}...".format(single_system))
-            process_gamelist(single_system, gamelist_roms_dir, log_file, backup_dir, del_roms=del_roms, del_art=del_art, del_snaps=del_snaps, del_m3u=del_m3u, clean=clean, auto_clean=auto_clean)
+            print(f"Now processing {single_system}...")
+            process_gamelist(single_system, gamelist_roms_dir, log_file, backup_dir, del_roms=del_roms, del_art=del_art, del_snaps=del_snaps, del_m3u=del_m3u, del_extra=del_extra, clean=clean, auto_clean=auto_clean)
 
     log_this(log_file, "\n")
-    log_this(log_file, "{}ING GAMELISTS: ended at {}".format(process_type.upper(), datetime.datetime.utcnow()))
+    log_this(log_file, f"{process_type.upper()}ING GAMELISTS: ended at {datetime.datetime.utcnow()}")
     cls()
-    d.textbox(log_file, title="Contents of {0}".format(log_file))
+    d.textbox(log_file, title=f"Contents of {log_file}")
 
     if auto_clean == False:
         cls()
@@ -1939,26 +2370,27 @@ def gamelists_orphan_dialog(systems, clean: bool):
     if clean == True:
         menu_text = ("Clean Orphaned Files"
                     "\n\nThis will clean your gamelist.xml files and optionally remove orphaned roms, artwork,  video snapshots, and multiple disk (m3u) files according to your choices below."
-                    "\n\nThe results of this procedure can be viewed in the \"/userdata/.utilities_tool/gamelist_logs\" folder, it will be called \"clean_gamelists-[date]-[time].log\"."
+                    "\n\nThe results of this procedure can be viewed in the \"/home/pi/.update_tool/gamelist_logs\" folder, it will be called \"clean_gamelists-[date]-[time].log\"."
                     "\n\nRemoving orphaned files will DELETE them by moving them to a folder that corresponds to the gamelist log called \"clean_gamelists-[date]-[time]\"."
                     "\nYou can reverse this operation using the \"Restore Clean Game List Logs\" function and selecting the appropriate log file."
                     "\n\nRemove orphaned:")
     else:
         menu_text = ("Check Orphaned Files"
                     "\n\nThis will check your gamelist.xml files and optionally check for orphaned roms, artwork, video snapshots, and multiple disk (m3u) files according to your choices below."
-                    "\n\nThe results of this procedure can be viewed in the \"/userdata/.utilities_tool/gamelist_logs\" folder, it will be called \"check_gamelists-[date]-[time].log\""
+                    "\n\nThe results of this procedure can be viewed in the \"/home/pi/.update_tool/gamelist_logs\" folder, it will be called \"check_gamelists-[date]-[time].log\""
                     "\n\nCheck orphaned:")
 
     code, tags = d.checklist(text=menu_text, 
-                            choices=[("Roms", "", False), ("Artwork", "", False), ("Snapshots", "", False), ("M3U Disk Files", "", False)])
+                            choices=[("Roms", "", False), ("Artwork", "", False), ("Snapshots", "", False), ("M3U Disk Files", "", False), ("Extra Files", "", False)])
 
     if code == d.OK:
         del_roms = True if "Roms" in tags else False
         del_art = True if "Artwork" in tags else False
         del_snaps = True if "Snapshots" in tags else False
         del_m3u = True if "M3U Disk Files" in tags else False
+        del_extra = True if "Extra Files" in tags else False
 
-        do_process_gamelists(systems, del_roms=del_roms, del_art=del_art, del_snaps=del_snaps, del_m3u=del_m3u, clean=clean)
+        do_process_gamelists(systems, del_roms=del_roms, del_art=del_art, del_snaps=del_snaps, del_m3u=del_m3u, del_extra=del_extra, clean=clean)
 
     cls()
     gamelists_dialog("Clean" if clean == True else "Check")
@@ -1978,20 +2410,20 @@ def gamelist_genres_dialog(system: str, game: dict, elem: ET.Element):
     for genre in system_genres:
         menu_choices.append((genre, "", False if len(menu_choices) > 0 else True))
 
-    dialog_text = "System:\t{}".format(system)
+    dialog_text = f"System:\t{system}"
 
     if "name" in game.keys():
-        dialog_text += "\n\nGame:\t{}".format(game["name"])
+        dialog_text += f"\n\nGame:\t{game['name']}"
 
     if "genre" in game.keys():
-        dialog_text += "\n\nGenre:\t{}".format(game["genre"])
+        dialog_text += f"\n\nGenre:\t{game['genre']}"
 
     if "path" in game.keys():
-        dialog_text += "\n\nRom:\t{}".format(game["path"].replace("./", ""))
+        dialog_text += f"\n\nRom:\t{game['path'].replace('./', '')}"
 
     if "desc" in game.keys():
         dialog_text += "\n\n" if len(dialog_text) > 0 else ""
-        dialog_text += "Description:\t{}".format(game["desc"])
+        dialog_text += f"Description:\t{game['desc']}"
 
     dialog_text += "\n\nSelect Genre:"
 
@@ -2009,7 +2441,7 @@ def gamelist_genres_dialog(system: str, game: dict, elem: ET.Element):
         if genre is not None:
             genre.text = tag
         else:
-            elem.append(ET.fromstring("<genre>{}</genre>".format(tag)))
+            elem.append(ET.fromstring(f"<genre>{tag}</genre>"))
 
         genre_collection = genres[tag]
         lines = []
@@ -2017,7 +2449,7 @@ def gamelist_genres_dialog(system: str, game: dict, elem: ET.Element):
         with open(cfg_file, 'r', encoding='utf-8') as f:
             lines = f.readlines()
             if game["path"] not in lines:
-                system_roms = "/home/pi/RetroPie/roms/{}/".format(system)
+                system_roms = f"/home/pi/RetroPie/roms/{system}/"
                 lines.append(game["path"].replace("./", system_roms) + "\n")
                 lines.sort()
         
@@ -2217,7 +2649,7 @@ def gamelist_counts_dialog(systems: list, all_systems=False):
     official_count = 0
     unofficial_count = 0
     games = []
-    games_text = "Count offical only is {}.\n\nsystem\tgame\tpath\tsize\tofficial\torigin".format("on" if official_only == True else "off")
+    games_text = f"Count offical only is {'on' if official_only == True else 'off'}.\n\nsystem\tgame\tpath\tsize\tofficial\torigin"
     additional_gameslist_columns = get_config_value("CONFIG_ITEMS", "additional_gameslist_columns")
     if additional_gameslist_columns is None:
         additional_gameslist_columns = ""
@@ -2235,15 +2667,15 @@ def gamelist_counts_dialog(systems: list, all_systems=False):
             total_count += system_count[0]
             official_count += system_count[1]
             unofficial_count += system_count[2]
-            systems_text += "\n-{}:\t{}".format(single_system, str(system_count[0]))
+            systems_text += f"\n-{single_system}:\t{str(system_count[0])}"
             if official_only == False:
-                systems_text += "\t{}\t{}".format(str(system_count[1]), str(system_count[2]))
+                systems_text += f"\t{str(system_count[1])}\t{str(system_count[2])}"
 
     systems_counted = "All" if all_systems == True else "Selected"
-    systems_header = "Count official only is {}\n\nTOTAL: {}".format("on" if official_only == True else "off", total_count)
+    systems_header = f"Count official only is {'on' if official_only == True else 'off'}\n\nTOTAL: {total_count}"
     if official_only == False:
-        systems_header += "\tOfficial: {}\tUnofficial: {}".format(official_count, unofficial_count)
-    systems_header += "\n\n{} Systems:".format(systems_counted)
+        systems_header += f"\tOfficial: {official_count}\tUnofficial: {unofficial_count}"
+    systems_header += f"\n\n{systems_counted} Systems:"
     systems_text = systems_header + systems_text
 
     display_text = systems_text
@@ -2254,11 +2686,18 @@ def gamelist_counts_dialog(systems: list, all_systems=False):
                         "To match your EmulationStation game count add 2 (1 for Kodi, 1 for Steam) to the total.\n"
                         "This utility is currently set to count " + display_count + ".\n"
                         "Because you have chosen to count all systems:\n"
-                        "\t-a compiled list af all games, by system, is located in /userdata/.utilities_tool/games_list.txt for your reference.\n"
-                        "\t-a copy of this count is located in /userdata/.utilities_tool/counts.txt for your reference.\n\n" + display_text)
-        with open("/userdata/.utilities_tool/counts.txt", 'w', encoding='utf-8') as f:
+                        "\t-a compiled list af all games, by system, is located in /home/pi/.update_tool/games_list.txt for your reference.\n"
+#                        "\t-a a list of games added or removed, by system, is located in /home/pi/.update_tool/games_list_changes.txt for your reference.\n"
+                        "\t-a copy of this count is located in /home/pi/.update_tool/counts.txt for your reference.\n\n" + display_text)
+        with open("/home/pi/.update_tool/counts.txt", 'w', encoding='utf-8') as f:
             f.write(systems_text)
 
+        games_list_file = "/home/pi/.update_tool/games_list.txt"
+#        games_list_previous = "/tmp/games_list.previous"
+#        
+#        if os.path.exists(games_list_file):
+#            shutil.copy2(games_list_file, games_list_previous)
+            
         for game in games:
             line_text = ""
             #game_list = list(game)
@@ -2266,9 +2705,12 @@ def gamelist_counts_dialog(systems: list, all_systems=False):
                 #line_text += "\t" if len(games_text) > 0 else ""
                 line_text += game_text + "\t"
             games_text += line_text[:-1] + "\n"
-            #games_text += "{}\t{}\t{}\t{}\t{}\t{}\n".format(game[0], game[1], game[2], game[3], game[4], game[5])
-        with open("/userdata/.utilities_tool/games_list.txt", 'w', encoding='utf-8') as f:
+            #games_text += f"{game[0]}\t{game[1]}\t{game[2]}\t{game[3]}\t{game[4]}\t{game[5]}\n"
+        with open(games_list_file, 'w', encoding='utf-8') as f:
             f.write(games_text)
+
+#        if os.path.exists(games_list_previous):
+#            runcmd(f"( echo \"System\tGame\n\"; diff --suppress-common-lines -y {games_list_previous} {games_list_file} | sed -e 's/</- Removed/' -e 's/^[\t ]*>\t\(.*\)/\\1 - Added/' ) >/home/pi/.update_tool/games_list_changes.txt")
 
     d.msgbox(display_text)
 
@@ -2284,7 +2726,7 @@ def remove_system_genres(system: str, cfg_file: str):
     with open(cfg_file, 'r', encoding='utf-8') as f:
         lines = f.readlines()
         for line in lines:
-            if line.find("/{}/".format(system)) < 0:
+            if line.find(f"/{system}/") < 0:
                 new_lines.append(line)
         
     with open(cfg_file, 'w', encoding='utf-8') as f:
@@ -2361,8 +2803,7 @@ def do_genre_realignment(systems: list, overwrite=False):
 
     for system in systems:
         system_genre_realignment(system)
-    d.msgbox('done!')
-    main_dialog()
+    d.msgbox('Genre realignment done!')
 
     return
 
@@ -2410,12 +2851,287 @@ def do_sort_gamelists(systems: list):
     print("")
     for system in systems:
         total_systems += 1
-        print("Now sorting: {}".format(system))
+        print(f"Now sorting: {system}")
         total_games += sort_gamelist(system)
         
-    d.msgbox("Sorted {} games, in {} systems.\n\nTime to process: {}".format(total_games, total_systems, str(datetime.datetime.utcnow() - start_time)[:-7]))
+    d.msgbox(f"Sorted {total_games} games, in {total_systems} systems.\n\nTime to process: {str(datetime.datetime.utcnow() - start_time)[:-7]}")
 
     return
+
+
+def return_invalid_files(files: list):
+    invalid_files = []
+    for file in files:
+        if not os.path.isfile(file):
+            invalid_files.append(file)
+
+    return invalid_files
+
+
+def do_process_unofficial_package(selected_items: list, name: str):
+    start_time = datetime.datetime.utcnow()
+    tmp_dir = Path("/", "tmp", "package")
+    rom_dir = "/home/pi/RetroPie/roms"
+    do_not_overwrite = ["favorite", "lastplayed", "playcount"]
+    total_size = 0
+    game_number = 0
+    counter = 0
+    systems = []
+    no_m3u_support = ["atari800"]
+
+    packaging_options = get_config_value("CONFIG_ITEMS", "packaging_options",return_none=False).strip().split(",")
+    print(f"Packaging {len(selected_items)} games into {name}.zip")
+    if "FULL_GAMELIST" in packaging_options:
+        print("Including full gammelist.xml files")
+    
+    if os.path.isdir(str(tmp_dir)):
+        shutil.rmtree(str(tmp_dir))
+
+    for selected_item in selected_items:
+        game_size = 0
+        system = selected_item[0]
+        rom_file = selected_item[1]
+        img_file = ""
+        snap_file = ""
+        counter += 1
+
+        if system not in systems:
+            systems.append(system)
+        gamelist = f"{rom_dir}/{system}/gamelist.xml"
+        system_dir = f"{rom_dir}/{system}/"
+        if not os.path.isfile(gamelist):
+            continue
+
+        print(f"Now Packaging Game {counter} of {len(selected_items)}: [{system}]\t{selected_item[2]}\t({rom_file})")
+        src_tree = ET.parse(gamelist)
+        src_root = src_tree.getroot()
+
+        parent = src_tree.find(f".//game[path=\"./{rom_file}\"]")
+        if parent is not None:
+            node = parent.find("image")
+            if node is not None:
+                if node.text is not None:
+                    img_file = node.text
+            node = parent.find("video")
+            if node is not None:
+                if node.text is not None:
+                    snap_file = node.text
+
+            # do the intial check to see if the elements exist in the xml file
+            if len(img_file) == 0:
+                print("-no image file defined, not processing...")
+                continue
+            elif len(snap_file) == 0:
+                print("-no snap file defined, not processing...")
+                continue
+
+            rom_file = system_dir + rom_file
+            img_file = img_file.replace("./", system_dir)
+            snap_file = snap_file.replace("./", system_dir)
+            # do final check
+            if not os.path.isfile(rom_file):
+                print(f"-missing rom file \"{rom_file}\", not procesing...")
+                continue
+            elif not os.path.isfile(img_file):
+                print(f"-missing image file \"{img_file}\", not procesing...")
+                continue
+            elif not os.path.isfile(snap_file):
+                print(f"-missing snap file \"{snap_file}\", not procesing...")
+                continue
+
+            # deal with .cue and .m3u files...
+            if os.path.splitext(rom_file)[1] == ".cue":
+                cue_files = parse_cue_file(rom_file)
+                if len(return_invalid_files(cue_files)) > 0:
+                    print("-cue file has invalid entries, not processing...")
+                    continue
+                for cue_file in cue_files:
+                    if os.path.isfile(cue_file):
+                        os.makedirs(str(tmp_dir) + os.path.dirname(cue_file), exist_ok=True)
+                        file_size = os.path.getsize(cue_file)
+                        total_size += file_size
+                        print(f"-now copying: {cue_file} ({convert_filesize(str(file_size))})")
+                        shutil.copyfile(cue_file, str(tmp_dir) + cue_file)                        
+            if os.path.splitext(rom_file)[1] == ".m3u":
+                m3u_files = get_recursive_m3u_files(rom_file, os.path.dirname(rom_file))
+                if len(return_invalid_files(m3u_files)) > 0:
+                    print("-m3u file has invalid entries, not processing...")
+                    continue
+                for m3u_file in m3u_files:
+                    if os.path.isfile(m3u_file):
+                        os.makedirs(str(tmp_dir) + os.path.dirname(m3u_file), exist_ok=True)
+                        file_size = os.path.getsize(m3u_file)
+                        total_size += file_size
+                        print(f"-now copying: {m3u_file} ({convert_filesize(str(file_size))})")
+                        shutil.copyfile(m3u_file, str(tmp_dir) + m3u_file)                        
+
+            # deal with no m3u support <- this is a hack that Rick does
+            if system in no_m3u_support:
+                data_dir = Path(f"{rom_dir}/{system}/.data/{os.path.basename(rom_file)}").with_suffix("")
+                if os.path.isdir(data_dir):
+                    for file in os.scandir(data_dir):
+                        if os.path.isfile(file.path):
+                            os.makedirs(str(tmp_dir) + os.path.dirname(file.path), exist_ok=True)
+                            file_size = os.path.getsize(file)
+                            total_size == file_size
+                            print(f"-now copying: {file.path} ({convert_filesize(str(file_size))})")
+                            shutil.copyfile(file.path, str(tmp_dir) + file.path)
+                #shutil.copytree(data_dir, str(tmp_dir) + data_dir)
+                data_file = Path(f"{rom_dir}/{system}/.multidisk/{os.path.basename(rom_file)}").with_suffix("")
+                if os.path.isfile(data_file):
+                    os.makedirs(str(tmp_dir) + os.path.dirname(str(data_file)), exist_ok=True)
+                    file_size = os.path.getsize(file)
+                    total_size == file_size
+                    print(f"-now copying: {str(data_file)} ({convert_filesize(str(file_size))})")
+                    shutil.copyfile(str(data_file), str(tmp_dir) + str(data_file))
+                #data_file = f"{rom_dir}/{system}/.data/{os.path.basename(rom_file)}"
+                #if os.path.isdir(Path(data_file).with_suffix("")):
+                #    data_dir = str(Path(data_file).with_suffix(""))
+                #    if os.path.isdir(str(tmp_dir) + data_dir):
+                #        shutil.rmtree(str(tmp_dir) + data_dir)
+                #    shutil.copytree(data_dir, str(tmp_dir) + data_dir)
+
+
+            os.makedirs(str(tmp_dir) + os.path.dirname(rom_file), exist_ok=True)
+            file_size = os.path.getsize(rom_file)
+            total_size += file_size
+            print(f"-now copying: {rom_file} ({convert_filesize(str(file_size))})")
+            shutil.copyfile(rom_file, str(tmp_dir) + rom_file)
+
+            os.makedirs(str(tmp_dir) + os.path.dirname(img_file), exist_ok=True)
+            file_size = os.path.getsize(img_file)
+            total_size += file_size
+            print(f"-now copying: {img_file} ({convert_filesize(str(file_size))})")
+            shutil.copyfile(img_file, str(tmp_dir) + img_file)
+
+            os.makedirs(str(tmp_dir) + os.path.dirname(snap_file), exist_ok=True)
+            file_size = os.path.getsize(snap_file)
+            total_size += file_size
+            print(f"-now copying: {snap_file} ({convert_filesize(str(file_size))})")
+            shutil.copyfile(snap_file, str(tmp_dir) + snap_file)
+
+            if not os.path.isfile(str(tmp_dir) + gamelist):
+                with open(str(tmp_dir) + gamelist, 'wb') as file:
+                    file.write(bytes("<gamelist></gamelist>", 'utf-8'))
+
+            #merge_xml(gamelist, str(tmp_dir) + gamelist)
+            dest_tree = ET.parse(str(tmp_dir) + gamelist)
+            dest_root = dest_tree.getroot()
+            
+            print("-adding to gamelist.xml")
+            dest_root.append(ET.fromstring("<game></game>"))
+            dest_parent = dest_root[len(dest_root) - 1]
+            for src_node in parent:
+                if src_node.tag not in do_not_overwrite:
+                    child = ET.SubElement(dest_parent, src_node.tag)
+                    child.text = src_node.text
+
+            indent(dest_root, space="\t", level=0)
+            with open(str(tmp_dir) + gamelist, "wb") as fh:
+                dest_tree.write(fh, "utf-8")
+
+            game_number += 1
+
+    if "FULL_GAMELIST" not in packaging_options:
+        for gamelist_file in tmp_dir.rglob('gamelist.xml'):
+            total_size += os.path.getsize(gamelist_file)
+    else:
+        for system in systems:
+            gamelist = f"{rom_dir}/{system}/gamelist.xml"
+            shutil.copyfile(gamelist, str(tmp_dir) + gamelist)
+
+    zip_file = f"/home/pi/.update_tool/unofficial_packages/{name}.zip"
+    os.makedirs(os.path.dirname(zip_file), exist_ok=True)
+
+    print(f"-compressing {convert_filesize(str(total_size))} into {name}.zip")
+    with zipfile.ZipFile(zip_file,'w') as zip:
+        # writing each file one by one
+        for file in tmp_dir.glob('**/*'):
+            if str(file) == zip_file:
+                continue
+            zip.write(file, arcname=file.relative_to(tmp_dir), compress_type=zipfile.ZIP_DEFLATED)        
+
+    shutil.rmtree(str(tmp_dir))
+
+    d.msgbox(f"Complete!\n\nPackaged {game_number} of {len(selected_items)} games ({convert_filesize(str(total_size))}) in {str(datetime.datetime.utcnow() - start_time)[:-7]}.\n\nYour file is located at:\n{zip_file}")
+
+    return
+
+
+def package_unofficial_update_name_dialog():
+    code, string = d.inputbox("What would you like to name your update package?")
+    if code == d.OK:
+        return string
+    
+    return None
+
+
+def unofficial_update_dialog(systems: list, dialog_title: str):
+    rom_dir = "/home/pi/RetroPie/roms"
+    menu_choices = []
+    all_roms = {}
+    selected_items = []
+
+    for system in systems:
+        official_roms = []
+        gamelist = f"{rom_dir}/{system}/gamelist.xml"
+
+        rickdangerous_file = f"{rom_dir}/{system}/.RickDangerous"
+        if os.path.isfile(rickdangerous_file):
+            with open(rickdangerous_file, 'r') as file:
+                official_roms = file.readlines()
+
+        src_tree = ET.parse(gamelist)
+        src_root = src_tree.getroot()
+
+        for src_game in src_root.iter("game"):
+            rom_file = ""
+            name = ""
+
+            # get rom file
+            src_node = src_game.find("path")
+            if src_node is not None:
+                if src_node.text is not None:
+                    rom_file = os.path.basename(src_node.text)
+                # get rom file
+            src_node = src_game.find("name")
+            if src_node is not None:
+                if src_node.text is not None:
+                    name = src_node.text
+
+            # just to be sure that name or path is not empty
+            if len(rom_file) == 0 or len(name) == 0:
+                continue
+
+            # check if rom is official
+            if "./" + rom_file + "\n" in official_roms:
+                continue
+
+            menu_choice = f"[{system}]\t{name}\t({rom_file})"
+            menu_choices.append((menu_choice, "", False))
+            all_roms[menu_choice] = (system, rom_file, name)
+
+    if len(menu_choices) == 0:
+        d.msgbox("No unofficial roms found!")
+        return []
+
+    menu_choices.sort()
+    code, tags = d.checklist(text="Select Games",
+                choices=menu_choices,
+                ok_label="Add Selected", 
+                extra_button=True, 
+                extra_label="Add All", 
+                title=dialog_title)
+    
+    if code == d.OK:
+        for tag in tags:
+            selected_items.append(all_roms[tag])
+
+    if code == d.EXTRA:
+        for selected_item in all_roms.keys():
+            selected_items.append(all_roms[selected_item])
+
+    return selected_items
 
 
 def gamelists_dialog(function: str):
@@ -2442,6 +3158,12 @@ def gamelists_dialog(function: str):
     elif function == "Count":
         dialog_title = "Count of Games"
         button_text = "Count"
+    elif function == "Package":
+        dialog_title = "Package Unofficial Update"
+        button_text = "Select"
+    elif function == "Package":
+        dialog_title = "Remove Unofficial Roms"
+        button_text = "Select"
 
     systems = get_all_systems_from_cfg()
     menu_choices = []
@@ -2452,9 +3174,9 @@ def gamelists_dialog(function: str):
     button_text = "Process" if function == "Genre" else function
     code, tags = d.checklist(text="Available Systems",
                             choices=menu_choices,
-                            ok_label="{} Selected".format(button_text), 
+                            ok_label=f"{button_text} Selected", 
                             extra_button=True, 
-                            extra_label="{} All".format(button_text), 
+                            extra_label=f"{button_text} All", 
                             title=dialog_title)
 
     if code == d.OK:
@@ -2466,6 +3188,11 @@ def gamelists_dialog(function: str):
             do_genre_realignment(tags)
         elif function == "Sort":
             do_sort_gamelists(tags)
+        elif function == "Package":
+            return tags
+            #unofficial_update_dialog(tags)
+        elif function == "Remove":
+            return tags
         else:
             gamelists_orphan_dialog(tags, function == "Clean")
 
@@ -2478,6 +3205,11 @@ def gamelists_dialog(function: str):
             do_genre_realignment(systems, True)
         elif function == "Sort":
             do_sort_gamelists(systems)
+        elif function == "Package":
+            return systems
+            #unofficial_update_dialog(systems)
+        elif function == "Remove":
+            return systems
         else:
             gamelists_orphan_dialog(systems, function == "Clean")        
 
@@ -2493,7 +3225,7 @@ def gamelists_dialog(function: str):
 
 def do_remove_logs(logs: list, logsdir: str):
     for log in logs:
-        log_file = os.path.join("/userdata/.utilities_tool/{}".format(logsdir), log)
+        log_file = os.path.join(f"/home/pi/.update_tool/{logsdir}", log)
         log_dir = os.path.splitext(log_file)[0]
         if os.path.exists(log_file):
             if os.path.isfile(log_file):
@@ -2508,7 +3240,7 @@ def do_remove_logs(logs: list, logsdir: str):
 
 def do_restore_logs(logs: list):
     for log in logs:
-        log_file = os.path.join("/userdata/.utilities_tool/gamelist_logs", log)
+        log_file = os.path.join("/home/pi/.update_tool/gamelist_logs", log)
         log_dir = os.path.splitext(log_file)[0]
         if os.path.exists(log_dir):
             if os.path.isdir(log_dir):
@@ -2529,7 +3261,7 @@ def get_total_path_size(dir: str):
 
 
 def get_log_size(log: str, subdir: str):
-    log_file = os.path.join("/userdata/.utilities_tool/{}".format(subdir), log)
+    log_file = os.path.join(f"/home/pi/.update_tool/{subdir}", log)
     log_dir = os.path.splitext(log_file)[0]
 
     if os.path.exists(log_file):
@@ -2550,13 +3282,13 @@ def logs_dialog(logsdir: str, function: str, title: str, patterns: list, multi=T
     total_size = 0
 
     for pattern in patterns:
-        for log in Path("/userdata/.utilities_tool/{}".format(logsdir)).glob(pattern):
+        for log in Path(f"/home/pi/.update_tool/{logsdir}").glob(pattern):
             if os.path.exists(log):
                 if os.path.isfile(log):
                     logs.append(os.path.basename(log))
 
     if len(logs) == 0:
-        d.msgbox("There are no logs to {}!".format(function.lower()))
+        d.msgbox(f"There are no logs to {function.lower()}!")
         #cls()
         #gamelist_utilities_dialog()
         return
@@ -2565,20 +3297,20 @@ def logs_dialog(logsdir: str, function: str, title: str, patterns: list, multi=T
     for menu_choice in logs:
         log_size = get_log_size(menu_choice, logsdir)
         total_size += log_size
-        menu_choices.append((menu_choice + " ({})".format(convert_filesize(str(log_size))), "", False))
+        menu_choices.append((menu_choice + f" ({convert_filesize(str(log_size))})", "", False))
 
-    dlg_text = "Log Files in \"/userdata/.utilities_tool/{}\" ({}):".format(logsdir, convert_filesize(str(total_size)))
+    dlg_text = f"Log Files in \"/home/pi/.update_tool/{logsdir}\" ({convert_filesize(str(total_size))}):"
     if multi == True:
         code, tags = d.checklist(text=dlg_text,
                                 choices=menu_choices,
-                                ok_label="{} Selected".format(function), 
+                                ok_label=f"{function} Selected", 
                                 extra_button=True, 
-                                extra_label="{} All".format(function), 
+                                extra_label=f"{function} All", 
                                 title=title)
     else:
         code, tags = d.radiolist(text=dlg_text,
                                 choices=menu_choices,
-                                ok_label="{} Selected".format(function), 
+                                ok_label=f"{function} Selected", 
                                 title=title)
 
     selected_logs = []
@@ -2624,7 +3356,7 @@ def get_emulators_cfg(log_file="", check=False):
             parts = line.split("=")
             if parts[0].strip() in items.keys():
                 if len(log_file) > 0:
-                    log_this(log_file, "-{} duplicate entry for \"{}\"".format("Identified" if check == True else "Removed", parts[0].strip()))
+                    log_this(log_file, f"-{'Identified' if check == True else 'Removed'} duplicate entry for \"{parts[0].strip()}\"")
                 duplicate_counter += 1
             if len(parts) == 2:
                 items[parts[0].strip()] = parts[1].strip()
@@ -2639,7 +3371,7 @@ def write_sorted_emulators_cfg(items: dict):
     
     
     for item in sorted(items.keys()):
-        lines_out += "{} = {}\n".format(item, items[item])
+        lines_out += f"{item} = {items[item]}\n"
         game_counter += 1
 
     file_time = safe_write_backup(emulator_cfg)
@@ -2664,11 +3396,11 @@ def do_clean_emulators_cfg(check=False, auto_clean=False):
     elif auto_clean == True:
         process_type = "auto_clean"
 
-    log_file = "/userdata/.utilities_tool/emulators_logs/{}_emulators-{}.log".format(process_type, file_time.strftime("%Y%m%d-%H%M%S"))
+    log_file = f"/home/pi/.update_tool/emulators_logs/{process_type}_emulators-{file_time.strftime('%Y%m%d-%H%M%S')}.log"
 
     if auto_clean == True:
         log_this(log_file, "AUTO ")
-    log_this(log_file, "{}ING emulators.cfg: started at {}\n\n".format("CHECK" if check == True else "CLEAN", file_time.strftime("%Y%m%d-%H%M%S")))
+    log_this(log_file, f"{'CHECK' if check == True else 'CLEAN'}ING emulators.cfg: started at {file_time.strftime('%Y%m%d-%H%M%S')}\n\n")
     log_this(log_file, "\n")
     
     items, duplicate_counter = get_emulators_cfg(log_file=log_file, check=check)
@@ -2677,16 +3409,16 @@ def do_clean_emulators_cfg(check=False, auto_clean=False):
         game_counter = write_sorted_emulators_cfg(items)
 
     if check == True:
-        results = "Clean would sort {} game entries.\nIdentified {} duplicate entries.\nIdentified {} bad entries.".format(len(items), duplicate_counter, bad_entries)
+        results = f"Clean would sort {len(items)} game entries.\nIdentified {duplicate_counter} duplicate entries.\nIdentified {bad_entries} bad entries."
     else:
-        results = "Sorted {} game entries.\nRemoved {} duplicate entries.\nRemoved {} bad entries.".format(len(items), duplicate_counter, bad_entries)
+        results = f"Sorted {len(items)} game entries.\nRemoved {duplicate_counter} duplicate entries.\nRemoved {bad_entries} bad entries."
 
     log_this(log_file, "\n")
     log_this(log_file, results)
     log_this(log_file, "\n")
     if auto_clean == True:
         log_this(log_file, "AUTO ")
-    log_this(log_file, "{}ING emulators.cfg: ended at {}".format("CHECK" if check == True else "CLEAN", datetime.datetime.utcnow().strftime("%Y%m%d-%H%M%S")))
+    log_this(log_file, f"{'CHECK' if check == True else 'CLEAN'}ING emulators.cfg: ended at {datetime.datetime.utcnow().strftime('%Y%m%d-%H%M%S')}")
 
     d.msgbox(results)
 
@@ -2710,12 +3442,38 @@ def check_clean_emulators_dialog():
 
     return
 
+
+def do_clean_unofficial_roms(selected_items: list):
+    for selected_item in selected_items:
+        system = selected_item[0]
+        rom_file = selected_item[1]
+
+        gamelist = f"/home/pi/RetroPie/roms/{system}/gamelist.xml"
+        if not os.path.isfile(gamelist):
+            continue
+
+        src_tree = ET.parse(gamelist)
+        src_root = src_tree.getroot()
+
+        parents = src_tree.findall(f".//game[path=\"./{rom_file}\"]")
+        for parent in parents:
+            src_root.remove(parent)
+            
+        with open(gamelist, "wb") as fh:
+            src_tree.write(fh, "utf-8")
+
+    clean_unofficial_roms(selected_items)
+
+    return
+
+
 def check_clean_utilities_dialog():
     code, tag = d.menu("Main Menu", 
                     choices=[("1", "Check Game Lists"), 
                              ("2", "Clean Game Lists"), 
                              ("3", "Restore Clean Game List Logs"), 
-                             ("4", "Remove Check/Clean Game List Logs")],
+                             ("4", "Remove Check/Clean Game List Logs"), 
+                             ("5", "Clean Unoffical Roms")],
                     title="Check/Clean Game List Utilities")
     
     if code == d.OK:
@@ -2726,7 +3484,14 @@ def check_clean_utilities_dialog():
         elif tag == "3":
             logs_dialog("gamelist_logs", "Restore", "Restore Clean Game List Logs", ["clean_gamelists*", "auto_clean_gamelists*"], multi=False)
         elif tag == "4":
-            logs_dialog("gamelist_logs", "Remove", "Remove Check/Clean Game List Logs", ["check_gamelists*", "clean_gamelists*", "auto_clean_gamelists*"], multi=True)
+            logs_dialog("gamelist_logs", "Remove", "Remove Check/Clean Game List Logs", ["check_gamelists*", "clean_gamelists*", "auto_clean_gamelists*", "clean_unofficial_roms*"], multi=True)
+        elif tag == "5":
+            systems = None
+            systems = gamelists_dialog("Remove")
+            if systems is not None:
+                selected_items = unofficial_update_dialog(systems, "Clean Unoffical Roms")
+                if len(selected_items) > 0:
+                    do_clean_unofficial_roms(selected_items)
 
     if code == d.CANCEL:
         cls()
@@ -2737,8 +3502,9 @@ def check_clean_utilities_dialog():
 
 def genre_utilities_dialog():
     code, tag = d.menu("Main Menu", 
-                    choices=[("1", "Manually Select Genres"), 
-                             ("2", "Realign Genre Collections")],
+                    choices=[("1", "Manually Select Genres"),
+                             ("2", "Realign Genre Collections"),
+                             ("3", "Clear Recent Additions Collection")],
                     title="Genre Utilities")
     
     if code == d.OK:
@@ -2746,6 +3512,8 @@ def genre_utilities_dialog():
             gamelists_dialog("Genre")
         elif tag == "2":
             gamelists_dialog("Realign")
+        elif tag == "3":
+            clear_recently_added_collection()
 
     if code == d.CANCEL:
         cls()
@@ -2814,20 +3582,51 @@ def get_manual_updates(path: str, available_updates: list, good=True):
     return manual_updates
 
 
-def auto_clean_gamelists(installed_updates: list, manual=False):
+def clean_unofficial_roms(selected_items: list):
+    file_time = datetime.datetime.utcnow()
+    log_file = f"/home/pi/.update_tool/gamelist_logs/clean_unofficial_roms-{file_time.strftime('%Y%m%d-%H%M%S')}.log"
+    systems = []
+    if len(selected_items) > 0:
+        log_this(log_file, "CLEANING UNOFFICIAL ROMS:", overwrite=True)
+        for selected_item in selected_items:
+            system = selected_item[0]
+            rom = selected_item[1]
+            name = selected_item[2]
+
+            if selected_item[0] == None or selected_item[1] == None or selected_item[2] == None:
+                continue
+
+            log_this(log_file, f"-[{system}]\t{name}\t({rom})")
+            if system not in systems:
+                systems.append(system)
+
+        log_this(log_file, "")
+        log_this(log_file, "\nSYSTEMS CLEANED:")
+        systems.sort()
+        for system in systems:
+            log_this(log_file, f"-{system}")
+        log_this(log_file, "")
+        log_this(log_file, "")
+
+        do_process_gamelists(systems, del_roms=True, del_art=True, del_snaps=True, del_m3u=True, clean=True, log_file=log_file, auto_clean=True)
+    
+    return
+
+
+def auto_clean_gamelists(installed_updates: list, manual=False, official=True):
     if len(installed_updates) > 0:
         systems = get_all_systems_from_cfg()
         type = "" if manual == False else "MANUAL "
 
         file_time = datetime.datetime.utcnow()
 
-        if not os.path.exists("/userdata/.utilities_tool/gamelist_logs"):
-            os.mkdir("/userdata/.utilities_tool/gamelist_logs")
+        if not os.path.exists("/home/pi/.update_tool/gamelist_logs"):
+            os.mkdir("/home/pi/.update_tool/gamelist_logs")
 
-        log_file = "/userdata/.utilities_tool/gamelist_logs/auto_clean_gamelists-{}.log".format(file_time.strftime("%Y%m%d-%H%M%S"))
-        log_this(log_file, "AUTO CLEANING {}UPDATES INSTALLED:".format(type))
+        log_file = f"/home/pi/.update_tool/gamelist_logs/auto_clean_gamelists-{file_time.strftime('%Y%m%d-%H%M%S')}.log"
+        log_this(log_file, f"AUTO CLEANING {'' if official else 'UNOFFICIAL'}{type}UPDATES INSTALLED:")
         for installed_update in installed_updates:
-            log_this(log_file, "-{}".format(installed_update))
+            log_this(log_file, f"-{installed_update}")
         log_this(log_file, "")
         log_this(log_file, "")
 
@@ -2836,10 +3635,57 @@ def auto_clean_gamelists(installed_updates: list, manual=False):
     return
     
 
-def process_manual_updates(path: str, updates: list, delete=False, auto_clean=False):
+def clear_recently_added_collection():
+    if d.yesno(text="Are you sure you want to clear the Recent Additions collection?") == d.OK:
+        runcmd("cat /dev/null > /opt/retropie/configs/all/emulationstation/collections/custom-zzz-recent.cfg")
+    
+    return
+
+
+def process_unofficial_manual_updates(path: str, updates: list, delete=False, auto_clean=False):
+    cls()
     start_time = datetime.datetime.utcnow()
     extracted = Path("/", "tmp", "extracted")
-    log_file = "/userdata/.utilities_tool/process_manual_updates.log"
+    log_file = "/home/pi/.update_tool/process_manual_updates.log"
+
+    installed_updates = []
+    for update in updates:
+        if os.path.isdir(path):
+            file = os.path.join(path, update)
+            if not os.path.isfile(file):
+                log_this(log_file, "Filename " + file + " can't be located, search for same filename without double spaces")
+                file = re.sub(' +', ' ', file)
+        else:
+            # singular file selected so no need to add filename again
+            file = path
+        if not os.path.isfile(file):
+            log_this(log_file, "Filename " + file + " can't be located, skip update for this")
+        else:
+            print(f"Now preparing unoffical update {os.path.basename(update)}")
+            if validate_unofficial_update(update):
+                if process_improvement(file, extracted, auto_clean=True, official=False) == True:
+                    if delete == True:
+                        os.remove(file)
+
+            installed_updates.append(update)
+
+    if auto_clean == True:
+        auto_clean_gamelists(installed_updates, manual=True, official=False)
+        #do_clean_emulators_cfg(check=False, auto_clean=True)
+        do_genre_realignment(get_all_systems_from_cfg(), True)
+        clean_recent("/opt/retropie/configs/all/emulationstation/collections/custom-zzz-recent.cfg")
+
+    d.msgbox(f"{len(installed_updates)} of {len(updates)} selected unofficial manual updates installed.\n\nTotal time to process: {str(datetime.datetime.utcnow() - start_time)[:-7]}")
+    reboot_msg = "\nReboot required for these changes to take effect. Rebooting now.!\n"
+    reboot_dialog(reboot_msg)
+
+    return
+
+def process_manual_updates(path: str, updates: list, delete=False, auto_clean=False):
+    cls()
+    start_time = datetime.datetime.utcnow()
+    extracted = Path("/", "tmp", "extracted")
+    log_file = "/home/pi/.update_tool/process_manual_updates.log"
 
     installed_updates = []
     for update in updates:
@@ -2863,13 +3709,15 @@ def process_manual_updates(path: str, updates: list, delete=False, auto_clean=Fa
     if auto_clean == True:
         auto_clean_gamelists(installed_updates, manual=True)
         do_clean_emulators_cfg(check=False, auto_clean=True)
+        do_genre_realignment(get_all_systems_from_cfg(), True)
+        clean_recent("/opt/retropie/configs/all/emulationstation/collections/custom-zzz-recent.cfg")
 
 #    if os.path.isdir(path):
 #        if delete == True:
 #            if len(os.listdir(path)) == 0:
 #                shutil.rmtree(path)
 
-    d.msgbox("{} of {} selected manual updates installed.\n\nTotal time to process: {}".format(len(installed_updates), len(updates), str(datetime.datetime.utcnow() - start_time)[:-7]))
+    d.msgbox(f"{len(installed_updates)} of {len(updates)} selected manual updates installed.\n\nTotal time to process: {str(datetime.datetime.utcnow() - start_time)[:-7]}")
     reboot_msg = "\nReboot required for these changes to take effect. Rebooting now.!\n"
     reboot_dialog(reboot_msg)
 
@@ -2890,7 +3738,7 @@ def get_valid_path_portion(path: str):
     return return_path
 
 
-def manual_updates_dialog(init_path: str, delete: bool):
+def manual_updates_dialog(init_path: str, delete: bool, official=True):
     path = None
     help_text = ("Type the path to directory or file directly into the text entry window."
                   "\nAs you type the directory or file will be highlighted, at this point you can press [Space] to add the highlighted item to the path."
@@ -2899,8 +3747,15 @@ def manual_updates_dialog(init_path: str, delete: bool):
     code, path = d.fselect(init_path, height=10, width=60, help_button=True)
 
     if code == d.OK:
-        if os.path.isdir(path) or os.path.isfile(path):
-            set_config_value("CONFIG_ITEMS", "update_dir", get_valid_path_portion(path))
+        keep_moving = True
+        if not official:
+            official_update_dir = get_config_value("CONFIG_ITEMS", "update_dir")
+            keep_moving = not (path == official_update_dir)
+        if keep_moving and (os.path.isdir(path) or os.path.isfile(path)):
+            if official:
+                set_config_value("CONFIG_ITEMS", "update_dir", get_valid_path_portion(path))
+            else:
+                set_config_value("CONFIG_ITEMS", "unofficial_update_dir", get_valid_path_portion(path))
             #official_improvements_dialog(path, delete)
         else:
             d.msgbox("Invalid path " + path)
@@ -2908,13 +3763,13 @@ def manual_updates_dialog(init_path: str, delete: bool):
             path = "/" if len(path) == 0 else path
             d.msgbox("Path is now set to " + path)
             cls()
-            manual_updates_dialog(path, delete)
+            manual_updates_dialog(path, delete, official)
     elif code == d.HELP:
         d.msgbox(help_text)
         path = get_valid_path_portion(path)
         path = "/" if len(path) == 0 else path
         cls()
-        manual_updates_dialog(path, delete)
+        manual_updates_dialog(path, delete, official)
     elif code == d.CANCEL:
         cls()
         main_dialog()
@@ -2922,9 +3777,12 @@ def manual_updates_dialog(init_path: str, delete: bool):
     return path
 
 
-def get_default_update_dir():
+def get_default_update_dir(official=True):
     if os.path.exists(tool_ini):
-        update_dir = get_config_value("CONFIG_ITEMS", "update_dir")
+        if official:
+            update_dir = get_config_value("CONFIG_ITEMS", "update_dir")
+        else:
+            update_dir = get_config_value("CONFIG_ITEMS", "unofficial_update_dir")
         if update_dir is not None and os.path.exists(update_dir):
             if update_dir[-1] != "/":
                 update_dir = update_dir + "/"
@@ -2936,29 +3794,19 @@ def get_default_update_dir():
     return "/"
 
 
-def downloaded_update_question_dialog():
-    code = d.yesno(text="You will be asked to choose a .zip file to load, or a directory where multiple .zip files are located."
-                        "\nThis will process the .zip file(s)?"
-                        "\n\nIf the name of a .zip file is identified as a valid official update, it will be processed as an official update package."
-                        "\n\nSelecting \"Keep\" will keep the .zip files once the process is complete."
+def downloaded_update_question_dialog(official=True):
+    message_text = ("You will be asked to choose a .zip file to load, or a directory where multiple .zip files are located."
+                    "\nThis will process the .zip file(s)?"
+                    "\n\nIf the name of a .zip file is identified as a valid official update, it will be processed as an official update package.")
+    if not official:
+        message_text = ("You are now processing unofficial updates, these files will be processed in a manner that prioritizes the official build image."
+                        "\nYou will not overwrite official roms and assets.")
+                        
+    code = d.yesno(text=message_text + "\n\nSelecting \"Keep\" will keep the .zip files once the process is complete."
                         "\nSelecting \"Delete\" will delete the .zip files once the process is complete."
                         "\n\nWould you like to remove .zip files?", yes_label="Keep", no_label="Delete")
 
-    update_dir = get_default_update_dir()
-    update_dir = get_valid_path_portion(update_dir)
-
-    if code == d.OK:
-        update_dir = manual_updates_dialog(update_dir, False)
-        if update_dir is not None:
-            official_improvements_dialog(update_dir, False)
-        
-
-    if code == d.CANCEL:
-        update_dir = manual_updates_dialog(update_dir, True)
-        if update_dir is not None:
-            official_improvements_dialog(update_dir, True)
-
-    return
+    return code
 
 
 def check_update_status_dialog(available_updates=[]):
@@ -3005,7 +3853,7 @@ def check_update_status_dialog(available_updates=[]):
                 if update_needed == True:
                     update_status = "recommended"
             
-            updates_status += "{} ({}) [{}]".format(update[0], update[3], update_status)
+            updates_status += f"{update[0]} ({update[3]}) [{update_status}]"
 
     if len(all_updates) == 0:
         set_config_value("CONFIG_ITEMS", "show_all_updates", "True")
@@ -3013,7 +3861,7 @@ def check_update_status_dialog(available_updates=[]):
         check_update_status_dialog(available_updates=available_updates)
         return
 
-    update_totals = "Show All Updates is {}\n\nNumber of available updates: {} ({})\nNumber of updates needed: {} ({})\nRecommended number of updates: {} ({})\n\n".format("on" if show_all_updates == True else "off", len(available_updates), get_total_size_of_updates(available_updates), len(needed_updates), get_total_size_of_updates(needed_updates), len(recommended_updates), get_total_size_of_updates(recommended_updates))
+    update_totals = f"Show All Updates is {'on' if show_all_updates == True else 'off'}\n\nNumber of available updates: {len(available_updates)} ({get_total_size_of_updates(available_updates)})\nNumber of updates needed: {len(needed_updates)} ({get_total_size_of_updates(needed_updates)})\nRecommended number of updates: {len(recommended_updates)} ({get_total_size_of_updates(recommended_updates)})\n\n"
     code = d.msgbox(update_totals + updates_status, title="Update Status", extra_button=True, extra_label=extra_label)
 
     if code == d.EXTRA:
@@ -3079,11 +3927,11 @@ def validate_manual_updates():
             index = all_files.index(full_path)
             del all_files[index]
 
-    dlg_text += "Total Files: {}\n".format(len(valid_list) + len(invalid_list) + len(all_files))
-    dlg_text += "Valid Files: {}\n".format(len(valid_list))
+    dlg_text += f"Total Files: {len(valid_list) + len(invalid_list) + len(all_files)}\n"
+    dlg_text += f"Valid Files: {len(valid_list)}\n"
     dlg_text += "\n"
-    dlg_text += "Invalid File Sizes: {}\n".format(len(invalid_list))
-    dlg_text += "Invalid File Names: {}\n".format(len(all_files))
+    dlg_text += f"Invalid File Sizes: {len(invalid_list)}\n"
+    dlg_text += f"Invalid File Names: {len(all_files)}\n"
     dlg_text += "\n\n"
 
     if len(invalid_list) > 0:
@@ -3105,7 +3953,7 @@ def validate_manual_updates():
             dlg_text += item + "\n"
         dlg_text += "\n"
         
-    d.msgbox(dlg_text, title="Results From {}".format(update_dir))
+    d.msgbox(dlg_text, title=f"Results From {update_dir}")
 
     return
 
@@ -3114,9 +3962,11 @@ def improvements_dialog():
     code, tag = d.menu("Select Option", 
                     choices=[("1", "Download and Install Updates"),
                              ("2", "Manually Install Downloaded Updates"), 
-                             ("3", "Update Status"), 
-                             ("4", "Validate Downloaded Updates"), 
-                             ("5", "Manual Updates Story")],
+                             ("3", "Manually Install Downloaded Unofficial Updates"), 
+                             ("4", "Package Unofficial Update"), 
+                             ("5", "Update Status"), 
+                             ("6", "Validate Downloaded Updates"), 
+                             ("7", "Manual Updates Story")],
                     title="Improvements")
 
     if code == d.OK:
@@ -3129,12 +3979,33 @@ def improvements_dialog():
                 official_improvements_dialog()
         elif tag == "2":
             space_warning()
-            downloaded_update_question_dialog()
+            update_dir = get_default_update_dir()
+            update_dir = get_valid_path_portion(update_dir)
+            code = downloaded_update_question_dialog()
+            update_dir = manual_updates_dialog(update_dir, delete=False if code == d.OK else True, official=True)
+            if update_dir is not None:
+                official_improvements_dialog(update_dir, delete=False if code == d.OK else True)
         elif tag == "3":
-            check_update_status_dialog()
+            update_dir = get_default_update_dir(official=False)
+            update_dir = get_valid_path_portion(update_dir)
+            code = downloaded_update_question_dialog(official=False)
+            update_dir = manual_updates_dialog(update_dir, False, official=False)
+            if update_dir is not None:
+                unofficial_improvements_dialog(update_dir=update_dir, delete=False if code == d.OK else True)
         elif tag == "4":
-            validate_manual_updates()
+            systems = None
+            systems = gamelists_dialog("Package")
+            if systems is not None:
+                selected_items = unofficial_update_dialog(systems, "Package Unofficial Update")
+                if len(selected_items) > 0:
+                    name = package_unofficial_update_name_dialog()
+                    if name is not None and len(name) > 0:
+                        do_process_unofficial_package(selected_items, name)
         elif tag == "5":
+            check_update_status_dialog()
+        elif tag == "6":
+            validate_manual_updates()
+        elif tag == "7":
             get_manual_updates_story()
 
         cls()
@@ -3282,7 +4153,9 @@ def check_root(directory):
     for files in os.listdir(directory):
         if os.path.exists(directory / "etc" / "emulationstation"):
             return True
-
+        #if os.path.exists(directory / "opt" / "retropie" / "libretrocores"):
+        #    return True
+        
     return False
 
 
@@ -3303,6 +4176,16 @@ def sort_official_updates(updates: list):
     return retval
 
 
+def get_total_size_of_unofficial_updates(updates: list):
+    total_size = 0
+
+    for update in updates:
+        if os.path.isfile(update):
+            total_size += os.path.getsize(update)
+
+    return convert_filesize(str(total_size))
+
+
 def get_total_size_of_updates(updates: list):
     total_size = 0
 
@@ -3312,14 +4195,57 @@ def get_total_size_of_updates(updates: list):
     return convert_filesize(str(total_size))
 
 
+def unofficial_improvements_dialog(update_dir=None, delete=False, available_updates=[], process_improvements=True):
+    selected_updates = []
+    title_msg  = "Manually Install Unofficial Updates"
+    if len(available_updates) == 0:
+        available_updates = get_zip_files(update_dir)
+
+    if len(available_updates) == 0:
+        d.msgbox("No unofficial updates available.")
+        return
+
+    available_updates.sort()
+
+    auto_clean = get_config_value("CONFIG_ITEMS", "auto_clean")
+    auto_clean = False if auto_clean is None else auto_clean == "True"
+
+    menu_choices = []
+    for update in available_updates:
+        menu_choices.append((f"{os.path.basename(update)} ({get_total_size_of_unofficial_updates([update])})", "", False))
+
+    code, tags = d.checklist(text=f"Auto Clean is {'on' if auto_clean == True else 'off'}\n\n\nNumber of available updates: {len(available_updates)} ({get_total_size_of_unofficial_updates(available_updates)})\n\nAvailable Updates",
+                             choices=menu_choices,
+                             ok_label="Apply Selected", 
+                             extra_button=True, 
+                             extra_label="Apply All", 
+                             title=title_msg)
+
+    if code == d.OK:
+        for tag in tags:
+            for update in available_updates:
+                if f"{os.path.basename(update)} ({get_total_size_of_unofficial_updates([update])})" == tag:
+                    selected_updates.append(update)
+                    break        
+    if code == d.EXTRA:
+        selected_updates = available_updates
+    
+    if len(selected_updates) > 0:
+        process_unofficial_manual_updates(update_dir, selected_updates, delete=delete, auto_clean=auto_clean)
+
+    return
+
+
 def official_improvements_dialog(update_dir=None, delete=False, available_updates=[], process_improvements=True):
     megadrive = check_drive()
-    #check_wrong_permissions()
+    check_wrong_permissions()
 
     reboot_msg = "Updates installed:"
     title_msg  = "Download and Install Official Updates"
     if update_dir is not None:
         title_msg  = "Manually Install Official Updates"
+    if process_improvements == False:
+        title_msg  = "Generate Manual Updates Story"
 
     if len(available_updates) == 0:
         available_updates = get_available_updates(megadrive, status=True)
@@ -3364,7 +4290,7 @@ def official_improvements_dialog(update_dir=None, delete=False, available_update
         if show_all_updates == True or update_needed == True:
             #TO DO: check if update has been installed from config and make True
             all_updates.append(update)
-            menu_choices.append(("{} ({})".format(update[0], update[3]), "", not update_applied))
+            menu_choices.append((f"{update[0]} ({update[3]})", "", not update_applied))
 
     if len(all_updates) == 0:
         set_config_value("CONFIG_ITEMS", "show_all_updates", "True")
@@ -3373,7 +4299,7 @@ def official_improvements_dialog(update_dir=None, delete=False, available_update
         return
 
     update_text = "Available" if show_all_updates == True else "Recommended"
-    code, tags = d.checklist(text="Auto Clean is {}\nShow All Updates is {}\n\nNumber of available updates: {} ({})\nNumber of updates needed: {} ({})\nRecommended number of updates: {} ({})\n\n{} Updates".format("on" if auto_clean == True else "off", "on" if show_all_updates == True else "off", len(available_updates), get_total_size_of_updates(available_updates), len(needed_updates), get_total_size_of_updates(needed_updates), len(recommended_updates), get_total_size_of_updates(recommended_updates), update_text),
+    code, tags = d.checklist(text=f"Auto Clean is {'on' if auto_clean == True else 'off'}\nShow All Updates is {'on' if show_all_updates == True else 'off'}\n\nNumber of available updates: {len(available_updates)} ({get_total_size_of_updates(available_updates)})\nNumber of updates needed: {len(needed_updates)} ({get_total_size_of_updates(needed_updates)})\nRecommended number of updates: {len(recommended_updates)} ({get_total_size_of_updates(recommended_updates)})\n\n{update_text} Updates",
                              choices=menu_choices,
                              ok_label="Apply Selected", 
                              extra_button=True, 
@@ -3386,7 +4312,7 @@ def official_improvements_dialog(update_dir=None, delete=False, available_update
     if code == d.OK:
         for tag in tags:
             for update in available_updates:
-                if "{} ({})".format(update[0], update[3]) == tag:
+                if f"{update[0]} ({update[3]})" == tag:
                     reboot_msg += "\n" + tag
                     selected_updates.append(update)
                     break
@@ -3456,35 +4382,327 @@ def update_config(extracted: str):
     return
 
 
-def process_improvement(file: str, extracted: str, auto_clean=False):
-    print("Processing official update: {}...".format(os.path.basename(file)))
-    with zipfile.ZipFile(file, 'r') as zip_ref:
-        zip_ref.extractall(extracted)
+def validate_unofficial_update(update):
+    with zipfile.ZipFile(update, 'r') as zip_ref:
+        for file_listing in zip_ref.infolist():
+            file = "/" + file_listing.filename
+            if os.path.isdir(file):
+                continue
+            if "/home/pi/RetroPie/roms" not in file:
+                return False
 
-    if check_root(extracted):
-        os.system("sudo chown -R pi:pi {} > /tmp/test".format(str(extracted)))
-        os.system("sudo chown -R pi:pi /etc/emulationstation/ > /tmp/test")
+    return True
 
-    update_config(extracted)
-    make_deletions(extracted)
-    install_emulators(extracted)
-    merge_gamelist(extracted)
-    merge_emulators_cfg(extracted)
-    copydir(extracted, "/")
+
+def is_unofficial_media_official(system: str, media: str, tag: str, media_dir: str):
+    rickdangerous_file = f"/home/pi/RetroPie/roms/{system}/.RickDangerous"
+    gamelist = f"/home/pi/RetroPie/roms/{system}/gamelist.xml"
+    official_roms = []
+
+    if not os.path.isfile(gamelist):
+        return False
+
+    if os.path.isfile(rickdangerous_file):
+        with open(rickdangerous_file, 'r') as file:
+            official_roms = file.readlines()
+
+    src_tree = ET.parse(gamelist)
+    src_root = src_tree.getroot()
+
+    parents = src_tree.findall(f".//game[{tag}=\"./{media_dir}/{media}\"]")
+    for parent in parents:
+        rom_file = ""
+        # get rom file
+        src_node = parent.find("path")
+        if src_node is not None:
+            if src_node.text is not None:
+                rom_file = os.path.basename(src_node.text)        
+                # check if rom is in official roms
+                if "./" + rom_file + "\n" in official_roms:
+                    return True
+                
+    return False
+
+
+def prepare_unofficial_update(directory):
+    roms_dir = "/home/pi/RetroPie/roms/"
+    tmp_roms_dir = str(directory) + roms_dir
+    bad_roms = []
+    all_files = []
+    no_m3u_support = ["atari800"]
+
+    print("Preparing...")
     
-    if check_root(extracted):
-        os.system("sudo chown -R root:root /etc/emulationstation/")
+    for file in directory.glob('**/*'):
+        if os.path.isfile(str(file)) and "/home/pi/RetroPie/roms/" in str(file):
+            if not os.path.basename(file) == "gamelist.xml":
+                all_files.append(str(file))
+
+    #for system in no_m3u_support:
+    #    data_dir = f"/home/pi/RetroPie/roms/{system}/.data/"
+    #    indices = [position for position, phrase in enumerate(all_files) if data_dir in phrase]
+    #    indices.sort(reverse=True)
+    #    for index in indices:
+    #        del all_files[index]
+
+    # check if gamelist.xml has been updated
+    for gamelist in Path(directory).rglob('gamelist.xml'):
+        system = ""
+        offical_roms = []
+        parts = str(gamelist).split("/")
+        if len(parts) > 1:
+            system = parts[len(parts) - 2]
+
+        if len(system) == 0:
+            continue
+
+        rickdangerous_file = f"{roms_dir}/{system}/.RickDangerous"
+        if os.path.isfile(rickdangerous_file):
+            with open(rickdangerous_file, 'r') as file:
+                official_roms = file.readlines()
+
+        src_tree = ET.parse(gamelist)
+        src_root = src_tree.getroot()
+
+        for src_game in src_root.iter("game"):
+            rom_file = ""
+            img_file = ""
+            snap_file = ""
+
+            # get rom file
+            src_node = src_game.find("path")
+            if src_node is not None:
+                if src_node.text is not None:
+                    rom_file = os.path.basename(src_node.text)
+                    # keep rom files
+                    tmp_rom_file = str(directory) + src_node.text.replace("./", roms_dir + system + "/")
+                    if tmp_rom_file in all_files:
+                        all_files.remove(tmp_rom_file)
+                    # deal with .cue files
+                    if os.path.splitext(tmp_rom_file)[1] == ".cue":
+                        cue_files = parse_cue_file(tmp_rom_file)
+                        for cue_file in cue_files:
+                            if cue_file in all_files:
+                                all_files.remove(cue_file)
+                    # deal with .m3u files
+                    if os.path.splitext(tmp_rom_file)[1] == ".m3u":
+                        m3u_files = get_recursive_m3u_files(tmp_rom_file, os.path.dirname(tmp_rom_file))
+                        for m3u_file in m3u_files:
+                            if m3u_file in all_files:
+                                all_files.remove(m3u_file)
+                    # deal with no m3u support
+                    if system in no_m3u_support:
+                        tmp_data_dir = os.path.dirname(str(directory) + src_node.text.replace("./", roms_dir + system + "/")) + "/.data/" + str(Path(rom_file).with_suffix(""))
+                        if os.path.isdir(tmp_data_dir):
+                            for file in os.scandir(tmp_data_dir):
+                                if os.path.isfile(file.path):
+                                    if file.path in all_files:
+                                        all_files.remove(file.path)
+                        tmp_data_file = os.path.dirname(str(directory) + src_node.text.replace("./", roms_dir + system + "/")) + "/.multidisk/" + str(Path(rom_file).with_suffix(""))
+                        if os.path.isfile(str(tmp_data_file)):
+                            if str(tmp_data_file) in all_files:
+                                all_files.remove(str(tmp_data_file))
+                    #tmp_data_dir = os.path.dirname(str(directory) + src_node.text.replace("./", roms_dir + system + "/")) + "/.data/" + str(Path(rom_file).with_suffix(""))
+            # get img file
+            src_node = src_game.find("image")
+            if src_node is not None:
+                if src_node.text is not None:
+                    img_file = os.path.basename(src_node.text)
+                    # keep img files
+                    tmp_img_file = str(directory) + src_node.text.replace("./", roms_dir + system + "/")
+                    if tmp_img_file in all_files:
+                        all_files.remove(tmp_img_file)
+            # get snap file
+            src_node = src_game.find("video")
+            if src_node is not None:
+                if src_node.text is not None:
+                    snap_file = os.path.basename(src_node.text)
+                    # keep snap files
+                    tmp_snap_file = str(directory) + src_node.text.replace("./", roms_dir + system + "/")
+                    if tmp_snap_file in all_files:
+                        all_files.remove(tmp_snap_file)
+
+            # check if rom is in official roms
+            if "./" + rom_file + "\n" in official_roms:
+                bad_roms.append([tmp_rom_file, tmp_img_file, tmp_snap_file])
+
+        # remove entry that shouldn't be there
+        for rom in bad_roms:
+            rom_file = rom[0]
+            img_file = rom[1]
+            snap_file = rom[2]
+            m3u_files = []
+
+            print(f"removing \"offical\" rom {rom}")
+            parents = src_tree.findall(f".//game[path=\"./{rom_file}\"]")
+            for parent in parents:
+                src_root.remove(parent)
+
+            # remove rom file
+            #file = f"{directory}/{roms_dir}/{system}/{rom_file}"
+            #file = file.replace("//", "/")
+            if os.path.isfile(rom_file):
+                # deal with .cue files
+                if os.path.splitext(rom_file)[1] == ".cue":
+                    cue_files = parse_cue_file(rom_file)
+                    for cue_file in cue_files:
+                        if os.path.isfile(cue_file):
+                            os.remove(cue_file)
+                # deal with .m3u files
+                if os.path.splitext(rom_file)[1] == ".m3u":
+                    m3u_files = get_recursive_m3u_files(rom_file, os.path.dirname(rom_file))
+                    for m3u_file in m3u_files:
+                        if os.path.isfile(m3u_file):
+                            os.remove(m3u_file)
+                os.remove(rom_file)
+            # remove img file
+            #file = f"{directory}/{roms_dir}/{system}/boxart/{img_file}"
+            #file = file.replace("//", "/")
+            if os.path.isfile(img_file):
+                os.remove(img_file)
+            # remove snaps file
+            file = f"{directory}/{roms_dir}/{system}/snaps/{rom_file}"
+            file = file.replace("//", "/")
+            if os.path.isfile(snap_file):
+                os.remove(snap_file)
+            
+        with open(gamelist, "wb") as file:
+            src_tree.write(file, "utf-8")
+
+        # kill all files that are not referenced in the gamelist.xml file
+        for file in all_files:
+            os.remove(file)
+
+        # we will check all remaining image/video files...
+        # check img files
+        for img_file in os.listdir(os.path.dirname(str(gamelist)) + "/boxart"):
+            if is_unofficial_media_official(system, os.path.basename(img_file), "image", "boxart"):
+                os.remove(os.path.dirname(str(gamelist)) + "/boxart/" + img_file)
+        # check snap files
+        for snap_file in os.listdir(os.path.dirname(str(gamelist)) + "/snaps"):
+            if is_unofficial_media_official(system, os.path.basename(snap_file), "video", "snaps"):
+                os.remove(os.path.dirname(str(gamelist)) + "/snaps/" + snap_file)
+
+    return
+
+
+def extract_zipfile(zip_file:str, dir_name: str):
+    start_time = datetime.datetime.utcnow()
+    total_size = 0
+    last_size = 0
+    current_size = 0
+
+    with zipfile.ZipFile(zip_file, 'r') as zip_ref:
+        total_size = sum([zinfo.file_size for zinfo in zip_ref.filelist])
+
+    if os.path.isdir(dir_name):
+        os.system(f"sudo rm -rf {dir_name} > /tmp/test")
+        #shutil.rmtree(dir_name)
+    os.mkdir(dir_name)
+    proc = subprocess.Popen(["/usr/bin/unzip", "-q", zip_file, "-d", dir_name])
+
+    while proc.poll() == None:
+        result = subprocess.run(["/usr/bin/du", "-sb", dir_name], stdout=subprocess.PIPE)
+        current_size = int(result.stdout.split()[0])
+        status_bar(total_size, current_size, start_time)
+        time.sleep(.5)
+        
+    if proc.returncode > 1:
+        text = f"Error unzipping file: {zip_file}\n\nWould you like to continue processing and skip this fie?"
+        code = d.yesno(text=text, ok_label="Continue")
+        if code == d.OK:
+            return False
+        return None
+        
+    #pids = [pid for pid in os.listdir('/proc') if pid.isdigit()]
+    #while str(pid) in pids:
+    #    result = subprocess.run(["/usr/bin/du", "-sb", dir_name], stdout=subprocess.PIPE)
+    #    current_size = int(result.stdout.split()[0])
+    #    status_bar(total_size, current_size, start_time)
+    #    time.sleep(.5)
+    #    pids = [pid for pid in os.listdir('/proc') if pid.isdigit()]
+
+    status_bar(total_size, current_size, start_time, complete=True)
+
+    return True
+
+
+def process_improvement(file: str, extracted: str, status=True, auto_clean=False, official=True):
+    #global update_being_processed
+    #update_being_processed = file
+    
+    print(f"Processing {'un' if not official else ''}official update: {os.path.basename(file)} ({convert_filesize(os.path.getsize(file))})...")
+    print("Extracting...")
+    zip_return = extract_zipfile(file, extracted)
+    if zip_return == None:
+        exit(1)
+    elif zip_return == False:
+        if os.path.exists(extracted) and os.path.isdir(extracted):
+            try:
+                shutil.rmtree(extracted)
+            except OSError as e:
+                print("Error: %s : %s" % (extracted, e.strerror))
+        update_being_processed = "None"
+        return False
+    #with zipfile.ZipFile(file, 'r') as zip_ref:
+    #    zip_ref.extractall(extracted)
+
+    os.system(f"sudo chmod -R +w {str(extracted)} > /tmp/test")
+
+    if official:
+        if check_root(extracted):
+            os.system(f"sudo chown -R pi:pi {str(extracted)} > /tmp/test")
+            os.system("sudo chown -R pi:pi /etc/emulationstation/ > /tmp/test")
+            #os.system("sudo chown -R pi:pi /opt/retropie/libretrocores/ > /tmp/test")
+        os.system("sudo chown -R pi:pi /opt/retropie/ports/ > /tmp/test")
+        update_config(extracted)
+        make_deletions(extracted)
+        execute_script(prepare_script(extracted, "read me pre-process!.txt"), file)
+        post_process_script = prepare_script(extracted, "read me post-process!.txt")
+        install_emulators(extracted)
+    else:
+        prepare_unofficial_update(extracted)
+    merge_gamelist(extracted, official)
+    if official:
+        merge_emulators_cfg(extracted)
+    print("Performing copy...")
+    copydir(extracted, "/")
+    if official:
+        if check_root(extracted):
+            os.system("sudo chown -R root:root /etc/emulationstation/")
+        os.system("sudo chown -R root:root /opt/retropie/libretrocores/")
+        os.system("sudo chown -R root:root /opt/retropie/ports/")
+        execute_script(post_process_script, file)
 
     try:
         shutil.rmtree(extracted)
     except OSError as e:
         print("Error: %s : %s" % (extracted, e.strerror))
+        update_being_processed = "None"
         return False
 
+    update_being_processed = "None"
     return True
 
 
+def do_unofficial_improvements(selected_updates: list, auto_clean=True):
+    cls()
+    start_time = datetime.datetime.utcnow()
+    improvements_dir = Path("/", "tmp", "improvements")
+    os.makedirs(improvements_dir, exist_ok=True)
+    extracted = improvements_dir / "extracted"
+
+    remove_improvements = True
+    installed_updates = []
+
+    for update in selected_updates:
+        improvement_passed = process_improvement(update, extracted)
+
+    return
+
+
 def do_improvements(selected_updates: list, megadrive: str, auto_clean=False):
+    cls()
     start_time = datetime.datetime.utcnow()
     improvements_dir = Path("/", "tmp", "improvements")
     os.makedirs(improvements_dir, exist_ok=True)
@@ -3498,15 +4716,15 @@ def do_improvements(selected_updates: list, megadrive: str, auto_clean=False):
         file_path = download_update(update[1], improvements_dir, megadrive, update[3])
 
         if file_path is None:
-            d.msgbox("Unable to download from MEGA.\n\nThe site enforces a 5GB per day download limit, based on your public IP address. You may have reached this limit.\n\nPlease try again later...", 10, 60)
+            d.msgbox("Unable to download from MEGA.\n\nThis site enforces a 5GB per day download limit.\nThe limit is based on your public IP address.\nYou may have reached this limit.\n\nPlease try again later...", 10, 60)
             break
 
-        #improvement_passed = process_improvement(file_path, extracted)
-        #if improvement_passed == True:
-        #    set_mega_config_value("INSTALLED_UPDATES", update[0], str(update[2]))
-        #    installed_updates.append(update[0])
+        improvement_passed = process_improvement(file_path, extracted)
+        if improvement_passed == True:
+            set_mega_config_value("INSTALLED_UPDATES", update[0], str(update[2]))
+            installed_updates.append(update[0])
     
-        #remove_improvements = remove_improvements & improvement_passed
+        remove_improvements = remove_improvements & improvement_passed
     
         if os.path.exists(extracted):
             if os.path.isdir(extracted):
@@ -3518,6 +4736,8 @@ def do_improvements(selected_updates: list, megadrive: str, auto_clean=False):
     if auto_clean == True:
         auto_clean_gamelists(installed_updates, manual=False)
         do_clean_emulators_cfg(check=False, auto_clean=True)
+        do_genre_realignment(get_all_systems_from_cfg(), True)
+        clean_recent("/opt/retropie/configs/all/emulationstation/collections/custom-zzz-recent.cfg")
 
     if remove_improvements == True:
         try:
@@ -3525,7 +4745,7 @@ def do_improvements(selected_updates: list, megadrive: str, auto_clean=False):
         except OSError as e:
             print("Error: %s : %s" % (improvements_dir, e.strerror))
     
-    d.msgbox("{} of {} selected updates installed.\n\nTotal time to process: {}".format(len(installed_updates), len(selected_updates), str(datetime.datetime.utcnow() - start_time)[:-7]))
+    d.msgbox(f"{len(installed_updates)} of {len(selected_updates)} selected updates installed.\n\nTotal time to process: {str(datetime.datetime.utcnow() - start_time)[:-7]}")
     if len(installed_updates) > 0:
         reboot_msg = "\nReboot required for these changes to take effect. Rebooting now.!\n"
         reboot_dialog(reboot_msg)
@@ -3576,7 +4796,7 @@ def do_system_overlay(system: str, enable_disable = "Enable"):
 
 
 def no_overlays_dialog(enable_disable = "Enable"):
-    d.msgbox("There are no system overlays to {}.".format(enable_disable.lower()))
+    d.msgbox(f"There are no system overlays to {enable_disable.lower()}.")
 
     overlays_dialog()
     return
@@ -3599,7 +4819,7 @@ def single_overlay_dialog(enable_disable = "Enable"):
 
     code, tag = d.radiolist(text="Available Systems",
                              choices=menu_choices,
-                             ok_label="{} Selected".format(enable_disable))    
+                             ok_label=f"{enable_disable} Selected")    
 
     if code == d.OK:
         do_system_overlay(tag, enable_disable)
@@ -3627,9 +4847,9 @@ def multiple_overlays_dialog(enable_disable = "Enable"):
 
     code, tags = d.checklist(text="Available Systems",
                              choices=menu_choices,
-                             ok_label="{} Selected".format(enable_disable), 
+                             ok_label=f"{enable_disable} Selected", 
                              extra_button=True, 
-                             extra_label="{} All".format(enable_disable))
+                             extra_label=f"{enable_disable} All")
 
     if code == d.OK:
         for system in tags:
@@ -3835,12 +5055,14 @@ def reboot_dialog(reboot_msg):
 def clean_failures():
     if os.path.exists("/tmp/improvements"):
         if os.path.isdir("/tmp/improvements"):
-            os.system("sudo chown -R pi:pi /tmp/improvements/")
-            shutil.rmtree("/tmp/improvements")
+            #os.system("sudo chown -R pi:pi /tmp/improvements/")
+            #shutil.rmtree("/tmp/improvements")
+            os.system("sudo rm -rf /tmp/improvements/")
     if os.path.exists("/tmp/extracted"):
         if os.path.isdir("/tmp/extracted"):
-            os.system("sudo chown -R pi:pi /tmp/extracted/")
-            shutil.rmtree("/tmp/extracted")
+            #os.system("sudo chown -R pi:pi /tmp/extracted/")
+            #shutil.rmtree("/tmp/extracted")
+            os.system("sudo rm -rf /tmp/extracted/")
 
     return
 
@@ -3860,25 +5082,125 @@ def check_for_updates():
         return False
 
 
+def fix_lame_update_dirs(key: str):
+    ret_val = ""
+    mounts = []
+
+    mount_cmd = runcmd("mount")
+    mount_points = mount_cmd.split("\n")
+    for mount_point in mount_points:
+        if " on " in mount_point and " type " in mount_point:
+            start_index = mount_point.find(" on ") + 4
+            end_index = mount_point.find(" type ")
+            mount_dir = mount_point[start_index: end_index]
+            if "/home/pi/" in mount_dir:
+                mounts.append(mount_dir)
+
+    update_dir = get_config_value("CONFIG_ITEMS", key, return_none=False)
+
+    if len(update_dir.strip()) == 0:
+        set_config_value("CONFIG_ITEMS", key, "")
+        return
+
+    for mount in mounts:
+        if mount in update_dir.strip():
+            return
+
+    parts = update_dir.strip().split("/")
+    while "" in parts:
+        index = parts.index("")
+        del parts[index]
+
+    for part in parts:
+        ret_val += "/" + part.strip()
+        if os.path.ismount(ret_val):
+            return
+        if not os.path.isdir(ret_val):
+            try:
+                os.mkdir(ret_val)
+            except:
+                pass
+
+    set_config_value("CONFIG_ITEMS", key, ret_val + "/")
+
+    return
+
+
 def main():
-    main_dialog()
+    global update_available_result
+    update_available_result = update_available()
+    if os.path.isfile(tool_ini):
+        mega_ini_check()
+        fix_lame_update_dirs("update_dir")
+        fix_lame_update_dirs("unofficial_update_dir")
+
+    if not os.path.isfile("/home/pi/.update_tool/override_emulators.cfg"):
+        log_this("/home/pi/.update_tool/override_emulators.cfg", "# place emulators.cfg entries here that you ABSOLUTELY do not want to get overwritten")
+        
+    if len(sys.argv) > 2 and sys.argv[2] == "notify":
+        if get_config_value('CONFIG_ITEMS', 'display_notification') not in ["Theme", "Tool"]:
+            remove_notification()
+            exit(0)
+
+        if update_available_result == "update available":
+            set_config_value("CONFIG_ITEMS", "upgrade_available", "True")
+        else:
+            set_config_value("CONFIG_ITEMS", "upgrade_available", "False")
+
+        if check_for_updates():
+            set_config_value("CONFIG_ITEMS", "update_available", "True")
+            if get_config_value('CONFIG_ITEMS', 'display_notification') == "Tool":
+                while runcmd("pidof omxplayer.bin | cat") != "":
+                    time.sleep(2)
+                if d.pause("Updates are available !\\n\\nProceed with Booting or Process Updates ?", height=11, seconds=5, ok_label="Boot", cancel_label="Update") == d.OK:
+                    exit(0)
+            else:
+                exit(0)
+        else:
+            set_config_value("CONFIG_ITEMS", "update_available", "False")
+            exit(0)
+
+    clean_failures()
+    
+    if update_available_result == "update available":
+        code = d.yesno('\nWe always recommend upgrading to the latest release of this tool.\n\nDo you want to upgrade now?\n', title="Newer Release Available" )
+        
+        if code == d.OK:
+            update_dialog()
+
+    global genres
+    section = get_config_section("GENRE_MAPPINGS")
+    if section is not None:
+        for key, val in section:
+            genres[key] = val
+
+    if runcmd("id -u -n") == "pi\n":
+        check_wrong_permissions()
+        hostname_dialog()
+    else:
+        user_dialog()
+
 
 if __name__ == "__main__":
     try:
         main()
     except SystemExit:
         #print("")
-        nothing = None
+        #nothing = None
+        pass
     except:
         # need to clean this up if we changed it
+        os.system("sudo chown -R root:root /etc/emulationstation/")
 
         title_text = ""
         if os.path.exists(tool_ini):
-            title_text = "A copy of this exception is logged in /userdata/.utilities_tool/exception.log for your records\n\n"
+            title_text = "A copy of this exception is logged in /home/pi/.update_tool/exception.log for your records\n\n"
             version = get_config_value("CONFIG_ITEMS", "tool_ver")
             if version is not None:
                 title_text += "Version: " + version + "\n\n"
-            log_this("/userdata/.utilities_tool/exception.log", "*****\nDate: {}\nVersion: {}\n\n{}".format(datetime.datetime.utcnow(), version, traceback.format_exc()))
-            log_this("/userdata/.utilities_tool/exception.log", "\n\n")
+            if (update_being_processed is not None):
+                title_text += "Update: " + update_being_processed + "\n\n"
+            log_this("/home/pi/.update_tool/exception.log", f"*****\nDate: {datetime.datetime.utcnow()}\nVersion: {version}\nUpdate: {update_being_processed}\n\n{traceback.format_exc()}")
+            log_this("/home/pi/.update_tool/exception.log", "\n\n")
 
         d.msgbox(title_text + traceback.format_exc(), title="Something has gone really bad...")

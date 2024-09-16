@@ -5,14 +5,18 @@ import platform
 import requests
 from datetime import datetime, timezone
 import traceback
+from pathlib import Path
 import utils
 from availableupdates import AvailableUpdates
 from inifile import IniFile
 from gamelist import Gamelist
+from dynamicdialog import DynamicDialog
 if platform.uname()[1] == "BATOCERA":
     from gamesystem import BatoceraGameSystem as GameSystem
+    game_system = "BATOCERA"
 else:
     from gamesystem import GameSystem as GameSystem
+    game_system = "retropie"
 
 sys.path.insert(0, './packages')
 from dialog import Dialog
@@ -26,6 +30,92 @@ mega = Mega()
 
 available_updates = AvailableUpdates()
 ini_file = IniFile(tool_ini)
+game_system = GameSystem(game_system)
+
+
+def parse_available_updates(available_updates: dict):
+    # this will return a dict with values being the update name
+    #
+    # keys are:
+    # all
+    # applied = update was upplied
+    # needed = update was not applied
+    # bad = update
+    # [directory] = directory for special available updates i.e. roms/batocera for base image updates in RD image
+    #
+    # usage:
+    # sort
+    # combine needed/bad for "needed" updates
+    # after first "needed" update everything else is "recommended" unless it is a base image update
+    updates = {}
+
+    for update in available_updates.keys():
+        if available_updates[update]["applied"] == 0:
+            if "needed" not in updates.keys():
+                updates["needed"] = [update]
+            else:
+                updates["needed"].append(update)
+        if available_updates[update]["applied"] == 1:
+            if "needed" not in updates.keys():
+                updates["needed"] = [update]
+            else:
+                updates["neededd"].append(update)
+        if available_updates[update]["applied"] == -1:
+            if "bad" not in updates.keys():
+                updates["bad"] = [update]
+            else:
+                updates["bad"].append(update)
+
+        if available_updates[update]["type"] != "all":
+            if available_updates[update]["type"] not in updates.keys():
+                updates[available_updates[update]["type"]] = [update]
+            else:
+                updates[available_updates[update]["type"]].append(update)
+
+        if "all" not in updates.keys():
+            updates["all"] = [update]
+        else:
+            updates["all"].append(update)
+
+    return updates
+
+
+def process_improvements(updates: list, status=True, auto_clean=False, official=True):
+    while len(updates) > 0:
+        print(f"Processing {'un' if not official else ''}official update: {os.path.basename(updates[0])} ({utils.convert_filesize(os.path.getsize(updates[0]))})...")
+        print("Extracting...")
+
+        # unzip file
+        zip_file = game_system.extract_zipfile(updates[0], ini_file)
+        if zip_file == False:
+            text = f"Error unzipping file: {updates[0]}\n\nWould you like to continue processing and skip this fie?"
+            code = d.yesno(text=text, ok_label="Continue")
+            if code == d.OK:
+                return False
+        
+        # create pre/post script commands
+        pre_script = utils.prepare_script(f'{ini_file.get_config_value("CONFIG_ITEMS", "tmp_directory")}/{ini_file.get_config_value("CONFIG_ITEMS", "extract_directory")}/{ini_file.get_config_value("CONFIG_ITEMS", "pre_script")}')
+        post_script = utils.prepare_script(f'{ini_file.get_config_value("CONFIG_ITEMS", "tmp_directory")}/{ini_file.get_config_value("CONFIG_ITEMS", "extract_directory")}/{ini_file.get_config_value("CONFIG_ITEMS", "post_script")}')
+        # merge gamelists
+        directory = ini_file.get_config_value("CONFIG_ITEMS", "tmp_directory")
+        gamelists = Path(directory).rglob('gamelist.xml')
+        if len(gamelists) > 0:
+            print("Merging gamelists...")
+        for gamelist in gamelists:
+            game_list = Gamelist(gamelist=str(gamelist), official=official)
+            merge_path = utils.clean_path(f'{ini_file.get_config_value("CONFIG_ITEMS", "check_gamelists_roms_dir")}/{game_list.system}/gamelist.xml')
+            if os.path.exists(merge_path):
+                merge_game_list = Gamelist(gamelist=merge_path)
+                game_list.merge(merge_game_list, official=official)
+            game_list.save()
+            game_list.write_origins()
+
+        # success!
+        del updates[0]
+
+
+    return
+
 
 def get_total_size_of_updates(updates: list):
     total_size = 0
@@ -54,14 +144,14 @@ def check_internet():
     return True
 
 
-def dlg_improvements_official(update_dir=None, delete=False, process_improvements=True, updates=None):
+def dlg_updates_official(update_dir=None, delete=False, process_improvements=True, updates=None):
     reboot_msg = "Updates installed:"
     menu_choices = []
-    update_list = available_updates.updates if updates is None else updates.updates
+    update_list = available_updates.get_available_updates() if updates is None else updates.updates
     total_updates = 0
     total_size = 0
     for update in sorted(update_list.keys()):
-        menu_choices.append([f"{update} ({update_list[update]['file_size']})", "", False])
+        menu_choices.append([f"{update} ({update_list[update]['file_size']})", "", update_list[update]])
         total_updates += 1
         total_size += update_list[update]['bytes']
     
@@ -109,7 +199,63 @@ def dlg_improvements_official(update_dir=None, delete=False, process_improvement
     return code
 
 
-def dlg_improvements():
+def dlg_image_manual():
+    directories = {"Image Packages": "batocera", "Rom Packs": "roms", "All": "all", "Needed": "needed", "Bad": "bad"}
+    title_msg  = "Manually Install Image Components"
+    menu_choices = []
+
+    update_list = available_updates.get_updates()
+    parsed_update_list = parse_available_updates(update_list)
+    dyn_image_show = DynamicDialog(ini_file, option="image_show", translator=directories, values=parsed_update_list)
+    dyn_image_select = DynamicDialog(ini_file, option="image_select")
+
+    updates = {}
+    if directories[dyn_image_show.value] in parsed_update_list:
+        updates = parsed_update_list[directories[dyn_image_show.value]]
+    total_updates = 0
+    total_size = 0
+
+    for update in sorted(updates):
+        menu_choices.append([f"[{utils.get_dict_key_by_value(directories, update_list[update]['type'])}] {update} ({update_list[update]['file_size']})", "", dyn_image_show.get_selected(update_list[update]['applied'] != 1, dyn_image_select)])
+        total_updates += 1
+        total_size += update_list[update]['bytes']
+
+    code, tags = d.checklist(
+        text=f"Showing {dyn_image_show.value}",
+        choices=sorted(menu_choices),
+        ok_label="Apply Selected", 
+        extra_button=bool(dyn_image_select.next_value), 
+        extra_label=dyn_image_select.next_value  + (" All" if dyn_image_select.next_value != "As Is" else ""), 
+        help_button=bool(dyn_image_show.next_value), 
+        help_label=f"Show {dyn_image_show.next_value}", 
+        title=title_msg
+    )
+
+    if code == d.HELP:
+        dyn_image_show.next()
+    elif code == d.EXTRA:
+        dyn_image_select.next()
+
+    return code
+
+
+def dlg_image():
+    result = True
+    code, tag = d.menu("Select Option", 
+                    choices=[("1", "Manually Install Image Components"), 
+                             ("2", "Image Component Status"), 
+                             ("3", "Validate Downloaded Image Components"), 
+                             ("4", "Manual Image Components Story")],
+                    title="Image")
+
+    if code == d.OK:
+        if tag == "1":
+            dlg(dlg_image_manual)
+
+    return code
+
+
+def dlg_updates():
     cls()
     result = True
     code, tag = d.menu("Select Option", 
@@ -118,7 +264,7 @@ def dlg_improvements():
                              ("3", "Update Status"), 
                              ("4", "Validate Downloaded Updates"), 
                              ("5", "Manual Updates Story")],
-                    title="Improvements")
+                    title="Updates")
 
     if code == d.OK:
         if tag == "1":
@@ -126,7 +272,7 @@ def dlg_improvements():
                 d.msgbox("You need to be connected to the internet for this.")
             else:
                 #space_warning()
-                dlg_improvements_official()
+                dlg_updates_official()
         #elif tag == "2":
         #    space_warning()
         #    downloaded_update_question_dialog()
@@ -146,11 +292,12 @@ def dlg_main(test="check_update"):
     #    update_available_result = update_available()
 
     code, tag = d.menu("Main Menu", 
-                    choices=[("1", "Improvements"),    
-                             ("2", "System Tools and Utilities"),
-                             ("3", "Installation"),
-                             ("4", "Settings"), 
-                             ("5", "Support")],
+                    choices=[("1", "Image Components"),    
+                             ("2", "Updates"),
+                             ("3", "System Tools and Utilities"),
+                             ("4", "Installation"),
+                             ("5", "Settings"), 
+                             ("6", "Support")],
                              
                     title=test,
                     backtitle="Rick Dangerous Utilities",
@@ -158,7 +305,9 @@ def dlg_main(test="check_update"):
     
     if code == d.OK:
         if tag == "1":
-            dlg(dlg_improvements)
+            dlg(dlg_image)
+        if tag == "2":
+            dlg(dlg_updates)
         #elif tag == "2":
         #    misc_menu()
         #elif tag == "3":
@@ -191,11 +340,14 @@ def dlg(*args, **kwargs):
     return
 
 def main():
+    DynamicDialog(ini_file).set_defaults()
+    game_list = Gamelist("./gamelist.xml")
+    game_list.write_origins(ini_file)
     global mega
     mega = mega.login()
 
     available_updates.mega = mega
-    available_updates.get_available_updates("https://mega.nz/folder/yDAliCBL#ex6Y7QagY_4hu0kUfu35jQ/file/bChAhCJS", status=True)
+    available_updates.get_available_updates(ini_file.get_config_value("CONFIG_ITEMS", "mega_base"), ini_file, status=True)
     dlg(dlg_main, test="check_update")
     cls()
 
